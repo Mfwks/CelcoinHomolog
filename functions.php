@@ -7,14 +7,12 @@ function consultarChaveAntigo($in){
     if ($key=='erro@pix.com') {
         $data['code'] = 'NNN';
         $data['description'] = 'QUALQUER OUTRO ERRO (API antiga).';
-        header('Content-Type: application/json');
-        exit(json_encode($data));
+        return json_encode($data);
     }
     if ($key=='fraude@pix.com') {
         $data['code'] = '422';
         $data['description'] = 'CHAVE PIX COM DADOS RESTRITOS POR MARCAÇÃO DE FRAUDE (API antiga).';
-        header('Content-Type: application/json');
-        exit(json_encode($data));
+        return json_encode($data);
     }
     $data['endtoendid'] = 'endtoendid';
     $data['account']['accountNumber'] = '127200';
@@ -29,8 +27,7 @@ function consultarChaveAntigo($in){
     $data['keyType'] = 'email';
 
     $data['description'] = 'CONSULTA COM SUCESSO (API antiga).';
-    header('Content-Type: application/json');
-    exit(json_encode($data));
+    return json_encode($data);
 }
 
 function consultarChave($in){
@@ -40,16 +37,14 @@ function consultarChave($in){
         $data['code']['errorCode'] = 'OUTROCODIGO';
         $data['code']['message'] = 'Outro erro genérico';
         $data['version'] = '1.0.0';
-        header('Content-Type: application/json');
-        exit(json_encode($data));
+        return json_encode($data);
     }
     if ($key=='fraude@pix.com') {
         $data['status'] = 'ERROR';
         $data['code']['errorCode'] = 'CPD0013';
         $data['code']['message'] = 'Chave Pix com dados restritos por marcação de fraude';
         $data['version'] = '1.0.0';
-        header('Content-Type: application/json');
-        exit(json_encode($data));
+        return json_encode($data);
     }
     $data['endtoEndId'] = 'endtoendid';
     $data['owner']['name'] = 'Daniel Eskelsen';
@@ -61,8 +56,7 @@ function consultarChave($in){
     $data['key'] = $key;
     $data['keyType'] = 'email';
     $data['description'] = 'CONSULTA COM SUCESSO.';
-    header('Content-Type: application/json');
-    exit(json_encode($data));
+    return json_encode($data);
 }
 
 // remaining
