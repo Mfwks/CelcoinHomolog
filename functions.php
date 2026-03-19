@@ -25,7 +25,7 @@ function consultarChaveAntigo($in){
     $data['account']['participant'] = '487';
     $data['account']['branch'] = '0001';
     $data['account']['accountType'] = 'N';
-    $data['key'] = 'eskelsen@yahoo.com';
+    $data['key'] = $key;
     $data['keyType'] = 'email';
 
     $data['description'] = 'CONSULTA COM SUCESSO (API antiga).';
