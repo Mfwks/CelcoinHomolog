@@ -17,7 +17,7 @@ $content = file_get_contents('php://input');
 $data = json_decode($content, 1);
 
 $fn = [
-    'pix/v1/dict/v2/key' => 'consultarChaveAntigo',
+    'pix/v1/dict/v2/key' => 'consultarChave',
     'enviar-pix' => 'enviarPix',
     'baas-wallet-transactions-webservice/v1/pix/payment' => 'enviarPix'
 ];
@@ -25,18 +25,14 @@ $fn = [
 $function = $fn[$call] ?? false;
 
 if (!$function) {
-    if (preg_match('#^([^/]+)/v1/pix/dict/entry/external/([^/]+)\?key=([^/]+)$#', $call, $matches)) {
-        // echo 'matches' . PHP_EOL;
-        // var_dump($matches);
-        $email = $matches[1] ?? null;
-        $account = $matches[2] ?? null;
-        if ($email && $account) {
-            $function = 'consultarChave';
-            $data['email'] = $email;
-            $data['account'] = $account;
-        }
+    if (preg_match('#^celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/external/([^/?]+)\?key=([^&]+)$#', $call, $matches)) {
+        $function = 'consultarChave';
+        $data['key'] = $matches[1] ?? null;
+        $data['account'] = $matches[2] ?? null;
     }
 }
+
+
 
 if ($function==false || !function_exists(($function))) {
     header('Content-Type: application/json');
