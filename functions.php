@@ -2,6 +2,37 @@
 
 # Functions
 
+function consultarChaveAntigo($in){
+    $key = $in['key'] ?? 'sucesso@pix.com';
+    if ($key=='erro@pix.com') {
+        $data['code'] = 'NNN';
+        $data['description'] = 'QUALQUER OUTRO ERRO (API antiga).';
+        header('Content-Type: application/json');
+        exit(json_encode($data));
+    }
+    if ($key=='fraude@pix.com') {
+        $data['code'] = '422';
+        $data['description'] = 'CHAVE PIX COM DADOS RESTRITOS POR MARCAÇÃO DE FRAUDE (API antiga).';
+        header('Content-Type: application/json');
+        exit(json_encode($data));
+    }
+    $data['endtoendid'] = 'endtoendid';
+    $data['account']['accountNumber'] = '127200';
+    $data['owner']['taxIdNumber'] = '06170097914';
+    $data['code'] = '200';
+
+    $data['owner']['name'] = 'Daniel Eskelsen';
+    $data['account']['participant'] = '487';
+    $data['account']['branch'] = '0001';
+    $data['account']['accountType'] = 'N';
+    $data['key'] = 'eskelsen@yahoo.com';
+    $data['keyType'] = 'email';
+
+    $data['description'] = 'CONSULTA COM SUCESSO (API antiga).';
+    header('Content-Type: application/json');
+    exit(json_encode($data));
+}
+
 function consultarChave($in){
     $key = $in['key'] ?? 'sucesso@pix.com';
     if ($key=='erro@pix.com') {
@@ -17,12 +48,6 @@ function consultarChave($in){
         $data['code']['errorCode'] = 'CPD0013';
         $data['code']['message'] = 'Chave Pix com dados restritos por marcação de fraude';
         $data['version'] = '1.0.0';
-        header('Content-Type: application/json');
-        exit(json_encode($data));
-    }
-    if ($key=='fraude-old@pix.com') {
-        $data['code'] = '422';
-        $data['description'] = 'CHAVE PIX COM DADOS RESTRITOS POR MARCAÇÃO DE FRAUDE (API antiga).';
         header('Content-Type: application/json');
         exit(json_encode($data));
     }

@@ -17,7 +17,7 @@ $content = file_get_contents('php://input');
 $data = json_decode($content, 1);
 
 $fn = [
-    'pix/v1/dict/v2/key' => 'consultarChave',
+    'pix/v1/dict/v2/key' => 'consultarChaveAntigo',
     'enviar-pix' => 'enviarPix',
     'baas-wallet-transactions-webservice/v1/pix/payment' => 'enviarPix'
 ];
@@ -31,8 +31,6 @@ if (!$function) {
         $data['account'] = $matches[2] ?? null;
     }
 }
-
-
 
 if ($function==false || !function_exists(($function))) {
     header('Content-Type: application/json');
