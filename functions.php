@@ -88,7 +88,6 @@ function gerarToken(){
     ],JSON_PRETTY_PRINT);
 }
 
-
 function saldo(){
     return '{"balance": 3000000.00}';
 }

@@ -19,7 +19,7 @@ $data = json_decode($content, 1);
 $fn = [
     'v5/token' => 'gerarToken',
     'pix/v1/dict/v2/key' => 'consultarChaveAntigo',
-    'enviar-pix' => 'enviarPix',
+    'pix/v1/payment' => 'enviarPix',
     'baas-wallet-transactions-webservice/v1/pix/payment' => 'enviarPix',
     'v5/merchant/balance' => 'saldo',
 ];
