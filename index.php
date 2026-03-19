@@ -17,6 +17,7 @@ $content = file_get_contents('php://input');
 $data = json_decode($content, 1);
 
 $fn = [
+    'v5/token' => 'gerarToken',
     'pix/v1/dict/v2/key' => 'consultarChaveAntigo',
     'enviar-pix' => 'enviarPix',
     'baas-wallet-transactions-webservice/v1/pix/payment' => 'enviarPix'
