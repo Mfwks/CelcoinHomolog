@@ -81,19 +81,16 @@ function gerarQRCode(){
     ],JSON_PRETTY_PRINT);
 }
 
-// function enviarPix(){
-   //  return '{"transactionCode": true}';
-// }
-
-function saldo(){
-    return '{"saldoDisponivelGlobal": 300.00}';
-}
-
 function gerarToken(){
     return json_encode([
         'expires_in'    => time() + 60,
         'access_token'  => gerarHashMock()
     ],JSON_PRETTY_PRINT);
+}
+
+
+function saldo(){
+    return '{"balance": 3000000.00}';
 }
 
 function gerarHashMock(){

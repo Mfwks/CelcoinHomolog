@@ -20,7 +20,8 @@ $fn = [
     'v5/token' => 'gerarToken',
     'pix/v1/dict/v2/key' => 'consultarChaveAntigo',
     'enviar-pix' => 'enviarPix',
-    'baas-wallet-transactions-webservice/v1/pix/payment' => 'enviarPix'
+    'baas-wallet-transactions-webservice/v1/pix/payment' => 'enviarPix',
+    'v5/merchant/balance' => 'saldo',
 ];
 
 $function = $fn[$call] ?? false;
