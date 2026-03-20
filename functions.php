@@ -4,7 +4,7 @@
 
 function consultarChaveAntigo($in){
     $key = $in['key'] ?? 'sucesso@pix.com';
-    if ($key=='erro@pix.com') {
+    if ($key=='erro@pix.com' || $key=='error@pix.com') {
         $data['code'] = 'NNN';
         $data['description'] = 'QUALQUER OUTRO ERRO (API antiga).';
         return json_encode($data);

@@ -1,0 +1,22 @@
+# Microframework
+Options All -Indexes
+RewriteEngine On
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+RewriteRule ^(.+)$ index.php [QSA,L]
+
+Header set Access-Control-Allow-Origin "*"
+Header set Access-Control-Allow-Methods: "GET,POST,OPTIONS,DELETE,PUT"
+
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]
+
+php_value date.timezone 'America/Sao_Paulo'
+
+AddDefaultCharset UTF-8
+
+php_flag log_errors On
+
+php_value error_log "errors.txt"
