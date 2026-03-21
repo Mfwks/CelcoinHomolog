@@ -1,6 +1,15 @@
 <?php
 
-# Index Dock Mock
+# Index Celcoin Homolog
+
+/*
+ * Usar a classes como Web, Json e Http do Microframework na nova versão
+ * Implementar a dinâmica de logs via link de controle
+ * Implementar identificador no cabeçalho para agrupamento de logs
+ * Página de documentação
+ * Página de visualização de request
+ * Página de visualização da lista de logs
+ */
 
 $in = explode('/',$_SERVER['REQUEST_URI'], 4);
 

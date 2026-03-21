@@ -1,2 +1,2 @@
 # CelcoinHomolog
-Implementation of an environment that partially simulates the Celcoin homologation environment.
+Implementação de um ambiente que simula parcialmente o ambiente de homologação da Celcoin.
