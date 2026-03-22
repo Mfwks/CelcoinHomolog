@@ -1,0 +1,15 @@
+{
+  "name": "Microframework",
+  "short_name": "Mfwks",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#af5ebd",
+  "icons": [
+    {
+      "src": "/assets/mfwks.png",
+      "sizes": "400x202",
+      "type": "image/png"
+    }
+  ]
+}
