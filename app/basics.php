@@ -3,8 +3,8 @@
 # Basics
 
 # Domain
-define('BASE', 		'/');
-define('DOMAIN',	'mf.mfwks.com');
+define('BASE', 		'/celcoin/');
+define('DOMAIN',	'cslabs.mfwks.com');
 define('SITE', 		'https://' . DOMAIN);
 
 # App Params
