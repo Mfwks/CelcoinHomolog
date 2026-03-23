@@ -29,7 +29,7 @@ class Web
 	{
 		$in = trim($in,'/');
 		$request = $_SERVER['REQUEST_URI'] ?? '/';
-		$mid = preg_replace('/^\/' . preg_quote($in, '/') . '/', '', parse_url($request, PHP_URL_PATH));
+        $mid = preg_replace('/^\/' . preg_quote($in, '/') . '(\/|$)/','/',parse_url($request, PHP_URL_PATH));
 		return ($mid AND $mid!='/') ? '/' . trim($mid, '/') . '/' : '/';
 	}
 	
