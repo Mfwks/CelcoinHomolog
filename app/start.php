@@ -26,9 +26,5 @@ if (!is_file(APP . 'streams/' . $web->stream . '.php')) {
 	exit('There is not such stream');
 }
 
-# Data & Sessions
-include STREAMS . 'conn.php';
-include STREAMS . 'session.php';
-
 # Stream
 include APP . 'streams/' . $web->stream . '.php';
