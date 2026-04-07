@@ -9,7 +9,8 @@ if ($key=='erro@pix.com') {
     $data['version'] = '1.0.0';
     $response = json_encode($data);
     header('Content-Type: application/json');
-    exit($response);
+    echo $response;
+    return;
 }
 
 if ($key=='fraude@pix.com') {
@@ -19,7 +20,8 @@ if ($key=='fraude@pix.com') {
     $data['version'] = '1.0.0';
     $response = json_encode($data);
     header('Content-Type: application/json');
-    exit($response);
+    echo $response;
+    return;
 }
 
 $data['endtoEndId'] = 'endtoendid';
@@ -35,4 +37,4 @@ $data['description'] = 'CONSULTA COM SUCESSO.';
 
 $response = json_encode($data);
 header('Content-Type: application/json');
-exit($response);
+echo $response;

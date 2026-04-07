@@ -14,11 +14,22 @@ include APP . 'basics.php';
 include APP . 'config.php';
 include APP . 'web.php';
 
+$json = file_get_contents('php://input');
+
+if ($json) {
+    file_put_contents(__DIR__ . '/logs/' . date('YmdHi') . '_request.log', $json);
+}
+
+ob_start(function ($buffer) {
+    file_put_contents(__DIR__ . '/logs/' . date('YmdHi') . '_response.log', $buffer);
+    return $buffer;
+});
+
 # Request stream
 $web->init();
 
 if (empty($web->stream)) {
-	include APP . 'streams/pages/404.php';
+	include APP . 'streams/pages/404.php'; 
 	exit;
 }
 

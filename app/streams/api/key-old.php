@@ -7,7 +7,8 @@ if ($key=='erro@pix.com' || $key=='error@pix.com') {
     $data['description'] = 'QUALQUER OUTRO ERRO (API antiga).';
     $response = json_encode($data);
     header('Content-Type: application/json');
-    exit($response);
+    echo $response;
+    return;
 }
 
 if ($key=='fraude@pix.com') {
@@ -15,7 +16,8 @@ if ($key=='fraude@pix.com') {
     $data['description'] = 'CHAVE PIX COM DADOS RESTRITOS POR MARCAÇÃO DE FRAUDE (API antiga).';
     $response = json_encode($data);
     header('Content-Type: application/json');
-    exit($response);
+    echo $response;
+    return;
 }
 
 $data['endtoendid'] = 'endtoendid';
@@ -34,4 +36,4 @@ $data['description'] = 'CONSULTA COM SUCESSO (API antiga).';
 
 $response = json_encode($data);
 header('Content-Type: application/json');
-exit($response);
+echo $response;
