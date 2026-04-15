@@ -8,16 +8,7 @@ $headers = getallheaders();
 
 $accept = $headers['Accept'] ?? null;
 
-if ($accept=='application/json') {
-    echo json_encode(['status' => false, 'error' => 'Registro não encontrado', 'code' => 404]);
+    header('Content-Type: application/json');
+    $data['status'] = 'ERROR';
+    $data['error'] = ['message' => 'Registro ou funcionalidade não encontrado'];    
     return;
-}
-
-$c['title']     = 'Não encontrado » ' . $c['site'];
-$c['header'] 	= '404 | Not Found';
-$c['message'] 	= 'Endereço inexistente no sistema.';
-$c['blink'] 	= 'p';
-$c['off']		= 100;
-
-include VIEWS . 'page.php';
-exit;

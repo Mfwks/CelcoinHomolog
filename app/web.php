@@ -35,6 +35,6 @@ $web->add('/baas-wallet-transactions-webservice/v1/pix/payment','api/payment-baa
 $web->add('/v5/merchant/balance','api/balance'); // saldo :: v5/merchant/balance
 $web->add('/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/external/{account}/','api/key');
 
-$web->add('/baas-onboarding/v1/account/check','api/account-status');
-$web->add('/baas-accountmanager/v1/account/fetch','api/account');
+$web->add('/baas-onboarding/v1/account/check/','api/account-status');
+$web->add('/baas-accountmanager/v1/account/fetch/','api/account');
 
