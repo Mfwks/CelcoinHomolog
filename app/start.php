@@ -29,7 +29,17 @@ ob_start(function ($buffer) {
 $web->init();
 
 if (empty($web->stream)) {
-	include APP . 'streams/pages/404.php'; 
+    header('HTTP/1.1 404 Not Found');
+    header('Content-Type: application/json');
+    $data = [
+        'status' => 'ERROR',
+        'error' => [
+            'errorCode' => 'CSLAB404',
+            'message' => 'Registro ou funcionalidade inexistente.',
+        ],
+        'version' => '1.0.0',
+    ];
+    echo json_encode($data, JSON_PRETTY_PRINT);
 	exit;
 }
 
