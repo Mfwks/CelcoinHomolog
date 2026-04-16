@@ -1,0 +1,97 @@
+<?php
+
+include_once __DIR__ . '/api-stream.php';
+
+use App\Core\Cslabs;
+
+header('Content-Type: application/json');
+
+$body = Cslabs::requestBody();
+
+if (!is_array($body)) {
+    http_response_code(400);
+    echo json_encode([
+        'status' => 'ERROR',
+        'error' => [
+            'errorCode' => 'CSLAB400',
+            'message' => 'Payload JSON inválido ou ausente.',
+        ],
+        'version' => '1.0.0',
+    ], JSON_PRETTY_PRINT);
+    return;
+}
+
+$amount = isset($body['amount']) ? (float) $body['amount'] : 0.0;
+$clientRequestId = trim((string) ($body['clientRequestId'] ?? ''));
+$debitAccount = trim((string) ($body['debitParty']['account'] ?? ''));
+$creditAccount = trim((string) ($body['creditParty']['account'] ?? ''));
+$description = trim((string) ($body['description'] ?? ''));
+
+if ($amount <= 0 || $clientRequestId === '' || $debitAccount === '' || $creditAccount === '') {
+    http_response_code(422);
+    echo json_encode([
+        'status' => 'ERROR',
+        'error' => [
+            'errorCode' => 'CSLAB422',
+            'message' => 'Campos obrigatórios ausentes para transferência interna.',
+        ],
+        'version' => '1.0.0',
+    ], JSON_PRETTY_PRINT);
+    return;
+}
+
+$existing = Cslabs::readEntity('internal_transfers', $clientRequestId);
+
+if ($existing !== false) {
+    echo json_encode($existing['response'], JSON_PRETTY_PRINT);
+    return;
+}
+
+$transactionId = gerarHashMock();
+$transfer = [
+    'transactionId' => $transactionId,
+    'clientRequestId' => $clientRequestId,
+    'amount' => round($amount, 2),
+    'status' => 'PROCESSING',
+    'description' => $description !== '' ? $description : 'Transferencia interna',
+    'debitParty' => [
+        'account' => $debitAccount,
+    ],
+    'creditParty' => [
+        'account' => $creditAccount,
+    ],
+    'createdAt' => date(DATE_ATOM),
+];
+
+$response = [
+    'transactionId' => $transactionId,
+    'clientRequestId' => $clientRequestId,
+    'status' => 'PROCESSING',
+    'amount' => round($amount, 2),
+    'message' => 'Transferência interna recebida com sucesso.',
+];
+
+$webhookPayload = [
+    'event' => 'wallet.internal.transfer.completed',
+    'transactionId' => $transactionId,
+    'clientRequestId' => $clientRequestId,
+    'status' => 'COMPLETED',
+    'amount' => round($amount, 2),
+    'description' => $transfer['description'],
+    'debitParty' => $transfer['debitParty'],
+    'creditParty' => $transfer['creditParty'],
+    'processedAt' => date(DATE_ATOM, time() + 2),
+];
+
+Cslabs::writeEntity('internal_transfers', $clientRequestId, [
+    'request' => $body,
+    'transfer' => $transfer,
+    'response' => $response,
+    'webhook' => $webhookPayload,
+    'webhook_url' => Cslabs::webhookUrl(),
+]);
+
+Cslabs::scheduleWebhook('wallet.internal.transfer.completed', $webhookPayload, 2);
+
+http_response_code(201);
+echo json_encode($response, JSON_PRETTY_PRINT);

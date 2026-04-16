@@ -21,9 +21,9 @@ class Cslabs
         $resolvedClientId = $bearer ? self::resolveClientIdFromToken($bearer) : null;
         $clientSeed = $credentialSeed ?: ($bearer ?: self::requestFingerprint($headers));
         $clientId = $resolvedClientId ?: self::clientIdFromSeed($clientSeed);
+        $ip = self::requestIp();
 
-        $workerSeed = $headers['X-CSLABS-WORKER'] ?? self::requestIp() . '|' . ($headers['User-Agent'] ?? '');
-        $workerId = substr(hash('sha256', $workerSeed), 0, 16);
+        $workerId = self::resolveWorkerId($clientId, $ip, $headers);
         $requestId = 'req_' . bin2hex(random_bytes(8));
 
         self::$context = [
@@ -33,7 +33,7 @@ class Cslabs
             'auth_hint' => $bearer ? substr($bearer, -8) : null,
             'identity_source' => $resolvedClientId ? 'bearer_link' : ($credentialSeed ? 'client_credentials' : ($bearer ? 'bearer_raw' : 'request_fingerprint')),
             'authorization' => $authorization ? '[redacted]' : null,
-            'ip' => self::requestIp(),
+            'ip' => $ip,
             'method' => $_SERVER['REQUEST_METHOD'] ?? 'GET',
             'path' => parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/',
             'query' => $_GET,
@@ -69,6 +69,19 @@ class Cslabs
     public static function requestBody(): array|string|null
     {
         return self::context()['body'];
+    }
+
+    public static function header(string $name): ?string
+    {
+        $headers = self::context()['headers'] ?? [];
+
+        foreach ($headers as $headerName => $value) {
+            if (strcasecmp($headerName, $name) === 0) {
+                return is_string($value) ? $value : null;
+            }
+        }
+
+        return null;
     }
 
     public static function injectInfoIntoJson(string $buffer): string
@@ -125,6 +138,8 @@ class Cslabs
             'last_seen_at' => $context['received_at'],
             'auth_hint' => $context['auth_hint'],
         ]);
+
+        self::touchWorkerOrigin($context['client_id'], $context['ip'], $context['worker_id'], $context['headers']);
     }
 
     public static function writeEntity(string $type, string $entityId, array $data, ?string $clientId = null): string
@@ -209,6 +224,94 @@ class Cslabs
             'source' => 'v5_token',
             'meta' => $meta,
         ]);
+    }
+
+    public static function clientSettings(): array
+    {
+        $settings = self::readEntity('settings', 'client');
+        return is_array($settings) ? $settings : [];
+    }
+
+    public static function updateClientSettings(array $data): array
+    {
+        $settings = array_merge(self::clientSettings(), $data);
+        self::writeEntity('settings', 'client', $settings);
+        return $settings;
+    }
+
+    public static function webhookUrl(): ?string
+    {
+        $bodyUrl = self::extractWebhookUrlFromBody(self::requestBody());
+
+        if ($bodyUrl !== null) {
+            self::updateClientSettings([
+                'webhook_url' => $bodyUrl,
+                'webhook_updated_at' => date(DATE_ATOM),
+                'webhook_source' => 'request_body',
+            ]);
+
+            return $bodyUrl;
+        }
+
+        $settings = self::clientSettings();
+        $stored = trim((string) ($settings['webhook_url'] ?? ''));
+
+        return filter_var($stored, FILTER_VALIDATE_URL) ? $stored : null;
+    }
+
+    public static function scheduleWebhook(string $event, array $payload, int $delaySeconds = 2, ?string $url = null): bool
+    {
+        $url ??= self::webhookUrl();
+
+        if (!$url) {
+            return false;
+        }
+
+        $context = self::context();
+        $requestId = $context['request_id'];
+        $clientId = $context['client_id'];
+        $webhookId = 'wh_' . bin2hex(random_bytes(8));
+
+        self::registerWebhook([
+            'webhook_id' => $webhookId,
+            'request_id' => $requestId,
+            'client_id' => $clientId,
+            'event' => $event,
+            'status' => 'scheduled',
+            'target_url' => $url,
+            'payload' => $payload,
+            'scheduled_at' => date(DATE_ATOM),
+            'delay_seconds' => $delaySeconds,
+        ]);
+
+        register_shutdown_function(function () use ($url, $payload, $event, $requestId, $clientId, $webhookId, $delaySeconds): void {
+            if (function_exists('fastcgi_finish_request')) {
+                fastcgi_finish_request();
+            }
+
+            sleep(max(0, $delaySeconds));
+            $sentAt = date(DATE_ATOM);
+            $result = self::sendJsonRequest($url, $payload);
+
+            $entry = [
+                'webhook_id' => $webhookId,
+                'request_id' => $requestId,
+                'client_id' => $clientId,
+                'event' => $event,
+                'status' => $result['ok'] ? 'delivered' : 'failed',
+                'target_url' => $url,
+                'payload' => $payload,
+                'sent_at' => $sentAt,
+                'response_code' => $result['status_code'],
+                'response_body' => $result['body'],
+                'error' => $result['error'],
+            ];
+
+            self::registerWebhook($entry);
+            self::appendWebhookToInteraction($requestId, $entry);
+        });
+
+        return true;
     }
 
     private static function storageRoot(): string
@@ -301,6 +404,32 @@ class Cslabs
         return $rawBody;
     }
 
+    private static function extractWebhookUrlFromBody(array|string|null $body): ?string
+    {
+        if (!is_array($body)) {
+            return null;
+        }
+
+        $candidates = [
+            $body['webhookUrl'] ?? null,
+            $body['webhookURL'] ?? null,
+            $body['callbackUrl'] ?? null,
+            $body['callbackURL'] ?? null,
+            $body['notificationUrl'] ?? null,
+            $body['notificationURL'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            $candidate = is_string($candidate) ? trim($candidate) : '';
+
+            if ($candidate !== '' && filter_var($candidate, FILTER_VALIDATE_URL)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
     private static function extractBearerToken(string $authorization): ?string
     {
         if (!preg_match('/Bearer\s+(.+)/i', $authorization, $matches)) {
@@ -351,6 +480,113 @@ class Cslabs
         }
 
         return (string) $tokenData['client_id'];
+    }
+
+    private static function resolveWorkerId(string $clientId, string $ip, array $headers): string
+    {
+        $path = self::workerOriginPath($clientId, $ip);
+        $origin = Json::read($path);
+
+        if (is_array($origin) && !empty($origin['worker_id'])) {
+            return (string) $origin['worker_id'];
+        }
+
+        $workerId = 'wrk_' . bin2hex(random_bytes(8));
+        $payload = [
+            'worker_id' => $workerId,
+            'client_id' => $clientId,
+            'ip' => $ip,
+            'user_agent' => $headers['User-Agent'] ?? null,
+            'first_seen_at' => date(DATE_ATOM),
+            'last_seen_at' => date(DATE_ATOM),
+        ];
+
+        self::ensureDir(dirname($path));
+        Json::write($path, $payload);
+
+        return $workerId;
+    }
+
+    private static function touchWorkerOrigin(string $clientId, string $ip, string $workerId, array $headers): void
+    {
+        $path = self::workerOriginPath($clientId, $ip);
+        $origin = Json::read($path);
+
+        $payload = is_array($origin) ? $origin : [];
+        $payload['worker_id'] = $workerId;
+        $payload['client_id'] = $clientId;
+        $payload['ip'] = $ip;
+        $payload['user_agent'] = $payload['user_agent'] ?? ($headers['User-Agent'] ?? null);
+        $payload['first_seen_at'] = $payload['first_seen_at'] ?? date(DATE_ATOM);
+        $payload['last_seen_at'] = date(DATE_ATOM);
+
+        self::ensureDir(dirname($path));
+        Json::write($path, $payload);
+    }
+
+    private static function workerOriginPath(string $clientId, string $ip): string
+    {
+        return self::clientRoot($clientId) . '/indexes/origins/' . hash('sha256', $ip) . '.json';
+    }
+
+    private static function registerWebhook(array $entry): void
+    {
+        $clientId = (string) ($entry['client_id'] ?? self::context()['client_id']);
+        $webhookId = self::safeName((string) ($entry['webhook_id'] ?? ('wh_' . bin2hex(random_bytes(8)))));
+        $directory = self::clientRoot($clientId) . '/webhooks/' . date('Ymd');
+        self::ensureDir($directory);
+        Json::write($directory . '/' . $webhookId . '.json', $entry);
+    }
+
+    private static function appendWebhookToInteraction(string $requestId, array $entry): void
+    {
+        $interaction = self::findInteraction(self::context()['client_id'], $requestId);
+
+        if (!$interaction) {
+            return;
+        }
+
+        $interaction['webhooks'] ??= [];
+        $interaction['webhooks'][] = $entry;
+
+        $day = date('Ymd', strtotime((string) ($interaction['received_at'] ?? 'now')));
+        $directory = self::clientRoot(self::context()['client_id']) . '/interactions/' . $day;
+        self::ensureDir($directory);
+        Json::write($directory . '/' . self::safeName($requestId) . '.json', $interaction);
+    }
+
+    private static function sendJsonRequest(string $url, array $payload): array
+    {
+        $curl = curl_init();
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        curl_setopt_array($curl, [
+            CURLOPT_URL => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_ENCODING => '',
+            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'Content-Type: application/json',
+                'Content-Length: ' . strlen((string) $body),
+            ],
+        ]);
+
+        $response = curl_exec($curl);
+        $error = curl_error($curl) ?: null;
+        $statusCode = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        curl_close($curl);
+
+        return [
+            'ok' => $error === null && $statusCode >= 200 && $statusCode < 300,
+            'status_code' => $statusCode,
+            'body' => $response ?: null,
+            'error' => $error,
+        ];
     }
 
     private static function safeName(string $value): string

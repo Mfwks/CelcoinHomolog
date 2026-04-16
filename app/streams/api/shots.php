@@ -390,6 +390,13 @@ function prettyPanel(mixed $value): string
                                 <pre><?= htmlspecialchars(prettyPanel($selected['meta'])) ?></pre>
                             </section>
                         <?php endif; ?>
+
+                        <?php if (!empty($selected['webhooks'])): ?>
+                            <section class="card">
+                                <h3>Webhooks</h3>
+                                <pre><?= htmlspecialchars(prettyPanel($selected['webhooks'])) ?></pre>
+                            </section>
+                        <?php endif; ?>
                     </div>
                 <?php endif; ?>
             </main>

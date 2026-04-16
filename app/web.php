@@ -28,11 +28,13 @@ $web->add('/status-fake','pages/status-fake');
 $web->add('/home','api/home');
 $web->add('/endpoints','api/endpoints');
 $web->add('/shots/{identifier}/','api/shots');
+$web->add('/cslabs/webhook','api/webhook-config');
 
 $web->add('/v5/token','api/token'); // gerarToken :: /v5/token
 $web->add('/pix/v1/dict/v2/key','api/key-old'); // consultarChaveAntigo :: /pix/v1/dict/v2/key
 $web->add('/pix/v1/payment','api/payment'); // enviarPix :: /pix/v1/payment
 $web->add('/baas-wallet-transactions-webservice/v1/pix/payment','api/payment-baas'); // enviarPix :: baas-wallet-transactions-webservice/v1/pix/payment
+$web->add('/baas-wallet-transactions-webservice/v1/wallet/internal/transfer','api/internal-transfer');
 $web->add('/v5/merchant/balance','api/balance'); // saldo :: v5/merchant/balance
 $web->add('/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/external/{account}/','api/key');
 
