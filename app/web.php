@@ -27,6 +27,7 @@ $web->add('/status-fake','pages/status-fake');
 # API Celcoin
 $web->add('/home','api/home');
 $web->add('/endpoints','api/endpoints');
+$web->add('/shots/{identifier}/','api/shots');
 
 $web->add('/v5/token','api/token'); // gerarToken :: /v5/token
 $web->add('/pix/v1/dict/v2/key','api/key-old'); // consultarChaveAntigo :: /pix/v1/dict/v2/key

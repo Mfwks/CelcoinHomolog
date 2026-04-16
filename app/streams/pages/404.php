@@ -4,11 +4,11 @@
 
 header('HTTP/1.1 404 Not Found');
 
-$headers = getallheaders();
+$c['title']     = 'Não encontrado » ' . $c['site'];
+$c['header'] 	= '404 | Not Found';
+$c['message'] 	= 'Endereço inexistente no sistema.';
+$c['blink'] 	= 'p';
+$c['off']		= 100;
 
-$accept = $headers['Accept'] ?? null;
-
-    header('Content-Type: application/json');
-    $data['status'] = 'ERROR';
-    $data['error'] = ['message' => 'Registro ou funcionalidade não encontrado'];    
-    return;
+include VIEWS . 'page.php';
+exit;

@@ -1,5 +1,7 @@
 <?php
 
+include_once __DIR__ . '/api-stream.php';
+
 include APP . 'Core/Json.php';
 
 use app\Core\Json;

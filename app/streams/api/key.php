@@ -1,8 +1,12 @@
 <?php
 
+include_once __DIR__ . '/api-stream.php';
+
 $key = $_GET['key'] ?? 'ok@pix.com';
 
-if ($key=='erro@pix.com') {
+$type = strstr($key,'@',true);
+
+if ($type=='erro' || $type=='error') {
     $data['status'] = 'ERROR';
     $data['code']['errorCode'] = 'OUTROCODIGO';
     $data['code']['message'] = 'Outro erro genérico';
@@ -13,7 +17,7 @@ if ($key=='erro@pix.com') {
     return;
 }
 
-if ($key=='fraude@pix.com') {
+if ($type=='fraude' || $type=='fraud') {
     $data['status'] = 'ERROR';
     $data['code']['errorCode'] = 'CPD0013';
     $data['code']['message'] = 'Chave Pix com dados restritos por marcação de fraude';

@@ -1,8 +1,12 @@
 <?php
 
+include_once __DIR__ . '/api-stream.php';
+
 $key = $web->args->key ?? 'ok@pix.com';
 
-if ($key=='erro@pix.com' || $key=='error@pix.com') {
+$type = strstr($key,'@',true);
+
+if ($type=='erro' || $type=='error') {
     $data['code'] = 'NNN';
     $data['description'] = 'QUALQUER OUTRO ERRO (API antiga).';
     $response = json_encode($data);
@@ -11,7 +15,7 @@ if ($key=='erro@pix.com' || $key=='error@pix.com') {
     return;
 }
 
-if ($key=='fraude@pix.com') {
+if ($type=='fraude' || $type=='fraud') {
     $data['code'] = '422';
     $data['description'] = 'CHAVE PIX COM DADOS RESTRITOS POR MARCAÇÃO DE FRAUDE (API antiga).';
     $response = json_encode($data);

@@ -822,7 +822,7 @@
 <body>
   <p>&nbsp;</p>
   <p>&nbsp;</p>
-  <h1>Code::Base</h1>
+  <h1>CSLabs::Celcoin</h1>
   <p>&nbsp;</p>
   <p>&nbsp;</p>
   <p><a href="https://microframeworks.com/">Microframeworks &copy;</a></p>
