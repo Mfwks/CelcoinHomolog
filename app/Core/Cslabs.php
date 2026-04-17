@@ -161,6 +161,37 @@ class Cslabs
         return Json::read($path);
     }
 
+    public static function listEntities(string $type, ?string $clientId = null): array
+    {
+        $clientId ??= self::context()['client_id'];
+        $directory = self::clientRoot($clientId) . '/entities/' . self::safeName($type);
+
+        if (!is_dir($directory)) {
+            return [];
+        }
+
+        $items = [];
+        $iterator = new \DirectoryIterator($directory);
+
+        foreach ($iterator as $file) {
+            if (!$file->isFile() || $file->getExtension() !== 'json') {
+                continue;
+            }
+
+            $data = Json::read($file->getPathname());
+
+            if (is_array($data)) {
+                $items[] = $data;
+            }
+        }
+
+        usort($items, function (array $a, array $b): int {
+            return strcmp((string) ($a['entity'] ?? ''), (string) ($b['entity'] ?? ''));
+        });
+
+        return $items;
+    }
+
     public static function listInteractions(string $clientId): array
     {
         $base = self::clientRoot($clientId) . '/interactions';
@@ -237,6 +268,64 @@ class Cslabs
         $settings = array_merge(self::clientSettings(), $data);
         self::writeEntity('settings', 'client', $settings);
         return $settings;
+    }
+
+    public static function knownWebhookEntities(): array
+    {
+        return [
+            'onboarding-create',
+            'internal-transfer-out',
+            'pix-payment-out',
+            'pix-payment-in',
+            'pix-dict-claim-open',
+            'pix-dict-claim-waiting',
+            'pix-dict-claim-confirmed',
+            'pix-dict-claim-cancelled',
+            'pix-dict-claim-completed',
+            'spb-transfer-out',
+            'spb-transfer-in',
+            'spb-reversal-in',
+            'spb-reversal-out',
+            'charge-create',
+            'charge-canceled',
+            'billpayment',
+            'billpayment-occurrence',
+            'judicial-movement-in',
+            'judicial-movement-out',
+            'kyc',
+            'pix-med-balance-blocked',
+            'pix-med-balance-unblocked',
+        ];
+    }
+
+    public static function webhookSubscription(string $entity): array|false
+    {
+        return self::readEntity('webhook_subscriptions', $entity);
+    }
+
+    public static function listWebhookSubscriptions(): array
+    {
+        return self::listEntities('webhook_subscriptions');
+    }
+
+    public static function saveWebhookSubscription(string $entity, string $url, ?array $auth = null, array $raw = []): array
+    {
+        $existing = self::webhookSubscription($entity);
+        $now = date(DATE_ATOM);
+        $knownEntities = self::knownWebhookEntities();
+        $record = [
+            'entity' => $entity,
+            'webhookUrl' => $url,
+            'auth' => $auth,
+            'known_entity' => in_array($entity, $knownEntities, true),
+            'updated_at' => $now,
+            'created_at' => is_array($existing) ? ($existing['created_at'] ?? $now) : $now,
+            'raw_request' => $raw,
+        ];
+
+        self::writeEntity('webhook_subscriptions', $entity, $record);
+
+        return $record;
     }
 
     public static function webhookUrl(): ?string

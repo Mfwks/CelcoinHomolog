@@ -29,6 +29,7 @@ $web->add('/home','api/home');
 $web->add('/endpoints','api/endpoints');
 $web->add('/shots/{identifier}/','api/shots');
 $web->add('/cslabs/webhook','api/webhook-config');
+$web->add('/baas-webhookmanager/v1/webhook/subscription','api/webhook-subscription');
 
 $web->add('/v5/token','api/token'); // gerarToken :: /v5/token
 $web->add('/pix/v1/dict/v2/key','api/key-old'); // consultarChaveAntigo :: /pix/v1/dict/v2/key
