@@ -83,15 +83,17 @@ $webhookPayload = [
     'processedAt' => date(DATE_ATOM, time() + 2),
 ];
 
+$webhookUrl = Cslabs::webhookSubscriptionUrl('internal-transfer-out');
+
 Cslabs::writeEntity('internal_transfers', $clientRequestId, [
     'request' => $body,
     'transfer' => $transfer,
     'response' => $response,
     'webhook' => $webhookPayload,
-    'webhook_url' => Cslabs::webhookUrl(),
+    'webhook_url' => $webhookUrl,
 ]);
 
-Cslabs::scheduleWebhook('wallet.internal.transfer.completed', $webhookPayload, 2);
+Cslabs::scheduleWebhook('wallet.internal.transfer.completed', $webhookPayload, 2, $webhookUrl);
 
 http_response_code(201);
 echo json_encode($response, JSON_PRETTY_PRINT);

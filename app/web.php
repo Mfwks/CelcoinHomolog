@@ -28,7 +28,6 @@ $web->add('/status-fake','pages/status-fake');
 $web->add('/home','api/home');
 $web->add('/endpoints','api/endpoints');
 $web->add('/shots/{identifier}/','api/shots');
-$web->add('/cslabs/webhook','api/webhook-config');
 $web->add('/baas-webhookmanager/v1/webhook/subscription','api/webhook-subscription');
 
 $web->add('/v5/token','api/token'); // gerarToken :: /v5/token

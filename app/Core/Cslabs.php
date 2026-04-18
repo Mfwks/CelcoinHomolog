@@ -257,19 +257,6 @@ class Cslabs
         ]);
     }
 
-    public static function clientSettings(): array
-    {
-        $settings = self::readEntity('settings', 'client');
-        return is_array($settings) ? $settings : [];
-    }
-
-    public static function updateClientSettings(array $data): array
-    {
-        $settings = array_merge(self::clientSettings(), $data);
-        self::writeEntity('settings', 'client', $settings);
-        return $settings;
-    }
-
     public static function knownWebhookEntities(): array
     {
         return [
@@ -308,6 +295,14 @@ class Cslabs
         return self::listEntities('webhook_subscriptions');
     }
 
+    public static function webhookSubscriptionUrl(string $entity): ?string
+    {
+        $subscription = self::webhookSubscription($entity);
+        $url = trim((string) ($subscription['webhookUrl'] ?? ''));
+
+        return filter_var($url, FILTER_VALIDATE_URL) ? $url : null;
+    }
+
     public static function saveWebhookSubscription(string $entity, string $url, ?array $auth = null, array $raw = []): array
     {
         $existing = self::webhookSubscription($entity);
@@ -327,32 +322,9 @@ class Cslabs
 
         return $record;
     }
-
-    public static function webhookUrl(): ?string
-    {
-        $bodyUrl = self::extractWebhookUrlFromBody(self::requestBody());
-
-        if ($bodyUrl !== null) {
-            self::updateClientSettings([
-                'webhook_url' => $bodyUrl,
-                'webhook_updated_at' => date(DATE_ATOM),
-                'webhook_source' => 'request_body',
-            ]);
-
-            return $bodyUrl;
-        }
-
-        $settings = self::clientSettings();
-        $stored = trim((string) ($settings['webhook_url'] ?? ''));
-
-        return filter_var($stored, FILTER_VALIDATE_URL) ? $stored : null;
-    }
-
     public static function scheduleWebhook(string $event, array $payload, int $delaySeconds = 2, ?string $url = null): bool
     {
-        $url ??= self::webhookUrl();
-
-        if (!$url) {
+        if (!$url || !filter_var($url, FILTER_VALIDATE_URL)) {
             return false;
         }
 
@@ -491,32 +463,6 @@ class Cslabs
         }
 
         return $rawBody;
-    }
-
-    private static function extractWebhookUrlFromBody(array|string|null $body): ?string
-    {
-        if (!is_array($body)) {
-            return null;
-        }
-
-        $candidates = [
-            $body['webhookUrl'] ?? null,
-            $body['webhookURL'] ?? null,
-            $body['callbackUrl'] ?? null,
-            $body['callbackURL'] ?? null,
-            $body['notificationUrl'] ?? null,
-            $body['notificationURL'] ?? null,
-        ];
-
-        foreach ($candidates as $candidate) {
-            $candidate = is_string($candidate) ? trim($candidate) : '';
-
-            if ($candidate !== '' && filter_var($candidate, FILTER_VALIDATE_URL)) {
-                return $candidate;
-            }
-        }
-
-        return null;
     }
 
     private static function extractBearerToken(string $authorization): ?string
