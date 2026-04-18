@@ -26,6 +26,10 @@ class Cslabs
         $workerId = self::resolveWorkerId($clientId, $ip, $headers);
         $requestId = 'req_' . bin2hex(random_bytes(8));
 
+        $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+        error_log($path);
+        $path = str_replace('/celcoin/','/',$path);
+        error_log($path);
         self::$context = [
             'request_id' => $requestId,
             'client_id' => $clientId,
@@ -35,7 +39,7 @@ class Cslabs
             'authorization' => $authorization ? '[redacted]' : null,
             'ip' => $ip,
             'method' => $_SERVER['REQUEST_METHOD'] ?? 'GET',
-            'path' => parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/',
+            'path' => $path,
             'query' => $_GET,
             'headers' => self::sanitizeHeaders($headers),
             'received_at' => date(DATE_ATOM),
