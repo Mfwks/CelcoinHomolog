@@ -2,7 +2,11 @@
 
 include_once __DIR__ . '/api-stream.php';
 
-$key = $web->args->key ?? 'ok@pix.com';
+$content = file_get_contents('php://input');
+$inputs = json_decode($content);
+
+$key = $inputs->key ?? 'ok@pix.com';
+$payerId = $inputs->payerId ?? '06170097914';
 
 $type = strstr($key,'@',true);
 
@@ -26,7 +30,7 @@ if ($type=='fraude' || $type=='fraud') {
 
 $data['endtoendid'] = 'endtoendid';
 $data['account']['accountNumber'] = '127200';
-$data['owner']['taxIdNumber'] = '06170097914';
+$data['owner']['taxIdNumber'] = $payerId;
 $data['code'] = '200';
 
 $data['owner']['name'] = 'Daniel Eskelsen';
