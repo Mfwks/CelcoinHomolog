@@ -289,6 +289,174 @@ class Cslabs
         ];
     }
 
+    public static function scenarioFromValue(mixed $value, string $default = 'success'): string
+    {
+        $text = strtolower(trim((string) $value));
+
+        if ($text === '') {
+            return $default;
+        }
+
+        $map = [
+            'fraud' => ['fraude', 'fraud', 'suspeita', 'restrito', 'restricted'],
+            'error' => ['erro', 'error', '500', 'outroerro'],
+            'failed' => ['falha', 'fail', 'failed', 'rejeitado', 'rejected'],
+            'not_found' => ['404', 'notfound', 'not-found', 'inexistente', 'naoencontrado', 'nao-encontrado'],
+            'blocked' => ['bloqueio', 'bloqueado', 'blocked', 'block'],
+        ];
+
+        foreach ($map as $scenario => $needles) {
+            foreach ($needles as $needle) {
+                if (str_contains($text, $needle)) {
+                    return $scenario;
+                }
+            }
+        }
+
+        return $default;
+    }
+
+    public static function scenarioFromPayload(array $payload, array $fields, string $default = 'success'): string
+    {
+        foreach ($fields as $field) {
+            $value = self::arrayGet($payload, $field);
+            $scenario = self::scenarioFromValue($value, '');
+
+            if ($scenario !== '') {
+                return $scenario;
+            }
+        }
+
+        return $default;
+    }
+
+    public static function pixKeyType(string $key): string
+    {
+        $key = trim($key);
+        $digits = preg_replace('/\D+/', '', $key);
+
+        if (filter_var($key, FILTER_VALIDATE_EMAIL)) {
+            return 'email';
+        }
+
+        if (preg_match('/^\+?\d{12,13}$/', $key) || preg_match('/^\+55\d{10,11}$/', $key)) {
+            return 'phone';
+        }
+
+        if (strlen($digits) === 11) {
+            return 'cpf';
+        }
+
+        if (strlen($digits) === 14) {
+            return 'cnpj';
+        }
+
+        return 'evp';
+    }
+
+    public static function pixKeyOwnerDocument(string $key, ?string $fallback = null): string
+    {
+        $digits = preg_replace('/\D+/', '', $key);
+
+        if (in_array(strlen($digits), [11, 14], true)) {
+            return $digits;
+        }
+
+        return preg_replace('/\D+/', '', (string) $fallback) ?: '06170097914';
+    }
+
+    public static function pixDictResponse(string $key, ?string $ownerTaxId = null): array
+    {
+        $key = trim($key) !== '' ? trim($key) : 'ok@pix.com';
+        $scenario = self::scenarioFromValue($key);
+
+        if ($scenario !== 'success') {
+            return self::pixDictError($scenario);
+        }
+
+        $type = self::pixKeyType($key);
+        $document = self::pixKeyOwnerDocument($key, $ownerTaxId);
+        $account = self::accountNumberFromSeed($key . '|' . $document);
+
+        return [
+            'endtoEndId' => 'E' . date('Ymd') . substr(hash('sha256', $key), 0, 24),
+            'owner' => [
+                'name' => strlen($document) === 14 ? 'Empresa Homologacao Celcoin' : 'Daniel Eskelsen',
+                'documentNumber' => $document,
+            ],
+            'account' => [
+                'account' => $account,
+                'participant' => '487',
+                'branch' => '0001',
+                'accountType' => 'N',
+            ],
+            'key' => $key,
+            'keyType' => $type,
+            'description' => 'CONSULTA COM SUCESSO.',
+        ];
+    }
+
+    public static function pixDictOldResponse(string $key, ?string $payerId = null): array
+    {
+        $response = self::pixDictResponse($key, $payerId);
+
+        if (($response['status'] ?? null) === 'ERROR') {
+            $errorCode = $response['code']['errorCode'] ?? 'NNN';
+            return [
+                'code' => $errorCode === 'CPD0013' ? '422' : 'NNN',
+                'description' => ($response['code']['message'] ?? 'QUALQUER OUTRO ERRO') . ' (API antiga).',
+            ];
+        }
+
+        return [
+            'endtoendid' => $response['endtoEndId'],
+            'account' => [
+                'accountNumber' => $response['account']['account'],
+                'participant' => $response['account']['participant'],
+                'branch' => $response['account']['branch'],
+                'accountType' => $response['account']['accountType'],
+            ],
+            'owner' => [
+                'taxIdNumber' => $response['owner']['documentNumber'],
+                'name' => $response['owner']['name'],
+            ],
+            'code' => '200',
+            'key' => $response['key'],
+            'keyType' => $response['keyType'],
+            'description' => 'CONSULTA COM SUCESSO (API antiga).',
+        ];
+    }
+
+    public static function pixPaymentResponse(array $payload): array
+    {
+        $scenario = self::scenarioFromPayload($payload, [
+            'key',
+            'pixKey',
+            'clientRequestId',
+            'transactionId',
+            'description',
+            'amount',
+        ]);
+
+        if ($scenario !== 'success') {
+            return self::paymentError($scenario);
+        }
+
+        $amount = (float) ($payload['amount'] ?? $payload['value'] ?? 1);
+        $clientRequestId = trim((string) ($payload['clientRequestId'] ?? gerarHashMock()));
+        $transactionId = 'pix_' . substr(hash('sha256', $clientRequestId), 0, 24);
+
+        return [
+            'status' => 'SUCCESS',
+            'transactionId' => $transactionId,
+            'clientRequestId' => $clientRequestId,
+            'amount' => round($amount, 2),
+            'endToEndId' => 'E' . date('Ymd') . substr(hash('sha256', $transactionId), 0, 24),
+            'message' => 'Pix recebido com sucesso.',
+            'version' => '1.0.0',
+        ];
+    }
+
     public static function webhookSubscription(string $entity): array|false
     {
         return self::readEntity('webhook_subscriptions', $entity);
@@ -377,6 +545,70 @@ class Cslabs
         });
 
         return true;
+    }
+
+    private static function arrayGet(array $payload, string $path): mixed
+    {
+        $value = $payload;
+
+        foreach (explode('.', $path) as $part) {
+            if (!is_array($value) || !array_key_exists($part, $value)) {
+                return null;
+            }
+
+            $value = $value[$part];
+        }
+
+        return $value;
+    }
+
+    private static function accountNumberFromSeed(string $seed): string
+    {
+        return (string) (hexdec(substr(hash('sha256', $seed), 0, 8)) % 900000 + 100000);
+    }
+
+    private static function pixDictError(string $scenario): array
+    {
+        $errors = [
+            'fraud' => ['CPD0013', 'Chave Pix com dados restritos por marcação de fraude'],
+            'not_found' => ['CPD0007', 'Chave Pix não encontrada.'],
+            'blocked' => ['CPD0014', 'Chave Pix temporariamente bloqueada.'],
+            'failed' => ['CPD0001', 'Falha ao consultar a chave Pix.'],
+            'error' => ['OUTROCODIGO', 'Outro erro genérico'],
+        ];
+
+        [$code, $message] = $errors[$scenario] ?? $errors['error'];
+
+        return [
+            'status' => 'ERROR',
+            'code' => [
+                'errorCode' => $code,
+                'message' => $message,
+            ],
+            'version' => '1.0.0',
+        ];
+    }
+
+    private static function paymentError(string $scenario): array
+    {
+        $errors = [
+            'fraud' => ['CBE171', 'Transação bloqueada por suspeita de fraude. Contate o suporte para mais informações.'],
+            'not_found' => ['CBE404', 'Transação ou recurso não encontrado.'],
+            'blocked' => ['CBE172', 'Transação bloqueada para a conta informada.'],
+            'failed' => ['CBE400', 'Transação rejeitada pela instituição recebedora.'],
+            'error' => ['CBE500', 'Erro interno ao processar a transação.'],
+        ];
+
+        [$code, $message] = $errors[$scenario] ?? $errors['error'];
+
+        return [
+            'status' => 'ERROR',
+            'error' => [
+                'errorCode' => $code,
+                'message' => $message,
+            ],
+            'version' => '1.0.0',
+        ];
     }
 
     private static function storageRoot(): string
