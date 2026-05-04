@@ -457,6 +457,62 @@ class Cslabs
         ];
     }
 
+    public static function billPaymentAuthorizeResponse(array $payload): array
+    {
+        $scenario = self::scenarioFromPayload($payload, [
+            'scenario',
+            'mockScenario',
+            'mock_scenario',
+        ]);
+
+        $digitable = trim((string) self::arrayGet($payload, 'barCode.digitable'));
+        $type = (int) (self::arrayGet($payload, 'barCode.type') ?? 0);
+
+        if ($digitable === '' && $scenario === 'success') {
+            $scenario = 'not_found';
+        }
+
+        if ($scenario !== 'success') {
+            return self::billPaymentError($scenario);
+        }
+
+        $digits = preg_replace('/\D+/', '', $digitable) ?: $digitable;
+        $seed = hash('sha256', $digits);
+        $isUtilityBill = str_starts_with($digits, '8') || $type === 1;
+        $value = self::billPaymentValue($digits, $seed);
+        $dueDate = self::billPaymentDueDate($digits, $seed);
+        $settleDate = date('m/d/Y', strtotime('+1 weekday'));
+        $assignor = self::pickBySeed($seed, [
+            'CLARO SP DDD 11',
+            'ENEL DISTRIBUICAO SAO PAULO',
+            'SABESP',
+            'VIVO FIXO BRASIL',
+            'BANCO DO BRASIL S/A',
+            'ITAU UNIBANCO S.A.',
+            'CAIXA ECONOMICA FEDERAL',
+        ]);
+        $transactionId = 1000000000 + (hexdec(substr($seed, 0, 8)) % 8999999999);
+
+        return [
+            'assignor' => $assignor,
+            'registerData' => $isUtilityBill ? null : self::billPaymentRegisterData($assignor, $value, $dueDate, $seed),
+            'settleDate' => $settleDate,
+            'dueDate' => $isUtilityBill ? null : $dueDate,
+            'endHour' => '21:00',
+            'initeHour' => '07:00',
+            'nextSettle' => 'N',
+            'digitable' => $digitable,
+            'transactionId' => $transactionId,
+            'type' => $isUtilityBill ? 1 : ($type ?: 2),
+            'value' => $value,
+            'maxValue' => null,
+            'minValue' => null,
+            'errorCode' => '000',
+            'message' => null,
+            'status' => 0,
+        ];
+    }
+
     public static function webhookSubscription(string $entity): array|false
     {
         return self::readEntity('webhook_subscriptions', $entity);
@@ -609,6 +665,97 @@ class Cslabs
             ],
             'version' => '1.0.0',
         ];
+    }
+
+    private static function billPaymentError(string $scenario): array
+    {
+        $errors = [
+            'fraud' => ['CSLAB403', 'Boleto bloqueado por suspeita de fraude.'],
+            'not_found' => ['CSLAB404', 'Registro ou funcionalidade inexistente.'],
+            'blocked' => ['CSLAB423', 'Boleto bloqueado para pagamento.'],
+            'failed' => ['CSLAB400', 'Boleto rejeitado pela instituição recebedora.'],
+            'error' => ['CSLAB500', 'Erro interno ao consultar boleto.'],
+        ];
+
+        [$code, $message] = $errors[$scenario] ?? $errors['error'];
+
+        return [
+            'status' => 'ERROR',
+            'error' => [
+                'errorCode' => $code,
+                'message' => $message,
+            ],
+            'version' => '1.0.0',
+        ];
+    }
+
+    private static function billPaymentValue(string $digits, string $seed): float
+    {
+        if (str_starts_with($digits, '8') && strlen($digits) >= 15) {
+            $candidate = (int) substr($digits, 4, 11);
+
+            if ($candidate > 0) {
+                return round($candidate / 100, 2);
+            }
+        }
+
+        if (strlen($digits) >= 10) {
+            $candidate = (int) substr($digits, -10);
+
+            if ($candidate > 0 && $candidate < 10000000) {
+                return round($candidate / 100, 2);
+            }
+        }
+
+        return round((1000 + (hexdec(substr($seed, 8, 6)) % 190000)) / 100, 2);
+    }
+
+    private static function billPaymentDueDate(string $digits, string $seed): string
+    {
+        $days = 3 + (hexdec(substr($seed, 14, 4)) % 40);
+
+        if (strlen($digits) >= 33 && preg_match('/^[0-9]{47,48}$/', $digits)) {
+            $factor = (int) substr($digits, 33, 4);
+
+            if ($factor > 0) {
+                $base = strtotime('1997-10-07');
+                $resolved = strtotime('+' . $factor . ' days', $base);
+
+                if ($resolved !== false && $resolved >= strtotime('-30 days') && $resolved <= strtotime('+5 years')) {
+                    return date('m/d/Y', $resolved);
+                }
+            }
+        }
+
+        return date('m/d/Y', strtotime('+' . $days . ' days'));
+    }
+
+    private static function billPaymentRegisterData(string $assignor, float $value, string $dueDate, string $seed): array
+    {
+        $discount = (hexdec(substr($seed, 18, 2)) % 3) === 0 ? round($value * 0.02, 2) : 0;
+        $interest = (hexdec(substr($seed, 20, 2)) % 4) === 0 ? round($value * 0.01, 2) : 0;
+        $fine = (hexdec(substr($seed, 22, 2)) % 5) === 0 ? round($value * 0.02, 2) : 0;
+
+        return [
+            'recipient' => $assignor,
+            'documentRecipient' => self::pickBySeed($seed . 'recipient', ['60746948000112', '17189525000168', '00000000000191']),
+            'payer' => self::pickBySeed($seed . 'payer', ['CLIENTE HOMOLOGACAO', 'MARIA SILVA', 'JOAO SOUZA']),
+            'documentPayer' => self::pickBySeed($seed . 'document', ['06170097914', '11144477735', '12345678000195']),
+            'originalValue' => $value,
+            'discountValue' => $discount,
+            'interestValueCalculated' => $interest,
+            'fineValueCalculated' => $fine,
+            'dueDate' => $dueDate,
+        ];
+    }
+
+    private static function pickBySeed(string $seed, array $items): mixed
+    {
+        if ($items === []) {
+            return null;
+        }
+
+        return $items[hexdec(substr(hash('sha256', $seed), 0, 6)) % count($items)];
     }
 
     private static function storageRoot(): string
