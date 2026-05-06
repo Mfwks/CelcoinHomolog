@@ -31,6 +31,7 @@ $web->add('/shots/{identifier}/','api/shots');
 $web->add('/baas-webhookmanager/v1/webhook/subscription','api/webhook-subscription');
 
 $web->add('/v5/token','api/token'); // gerarToken :: /v5/token
+$web->add('/v5/transactions/billpayments/authorize','api/billpayment-authorize'); // consultaPagamentos :: /v5/transactions/billpayments/authorize
 $web->add('/pix/v1/dict/v2/key','api/key-old'); // consultarChaveAntigo :: /pix/v1/dict/v2/key
 $web->add('/pix/v1/payment','api/payment'); // enviarPix :: /pix/v1/payment
 $web->add('/baas-wallet-transactions-webservice/v1/pix/payment','api/payment-baas'); // enviarPix :: baas-wallet-transactions-webservice/v1/pix/payment
