@@ -480,36 +480,979 @@ class Cslabs
         $seed = hash('sha256', $digits);
         $isUtilityBill = str_starts_with($digits, '8') || $type === 1;
         $value = self::billPaymentValue($digits, $seed);
-        $dueDate = self::billPaymentDueDate($digits, $seed);
-        $settleDate = date('m/d/Y', strtotime('+1 weekday'));
+        $dueIso = self::billPaymentDueIso($digits, $seed);
+        $settleDate = date('d/m/Y', strtotime('+1 weekday'));
         $assignor = self::pickBySeed($seed, [
+            'BANCO ITAU S.A.',
+            'Banco Inter S.A.',
+            'BANCO SANTANDER S.A',
+            'BANCO DO BRASIL S.A.',
+            'CAIXA ECONOMICA FEDERAL',
             'CLARO SP DDD 11',
             'ENEL DISTRIBUICAO SAO PAULO',
             'SABESP',
             'VIVO FIXO BRASIL',
-            'BANCO DO BRASIL S/A',
-            'ITAU UNIBANCO S.A.',
-            'CAIXA ECONOMICA FEDERAL',
         ]);
         $transactionId = 1000000000 + (hexdec(substr($seed, 0, 8)) % 8999999999);
+        $resolvedType = $isUtilityBill ? 1 : ($type ?: 2);
 
         return [
             'assignor' => $assignor,
-            'registerData' => $isUtilityBill ? null : self::billPaymentRegisterData($assignor, $value, $dueDate, $seed),
+            'registerData' => $isUtilityBill ? null : self::billPaymentRegisterData($assignor, $value, $dueIso, $seed),
             'settleDate' => $settleDate,
-            'dueDate' => $isUtilityBill ? null : $dueDate,
-            'endHour' => '21:00',
+            'dueDate' => $isUtilityBill && !str_starts_with($digits, '858') ? null : $dueIso . 'Z',
+            'endHour' => $isUtilityBill ? '22:00' : '23:00',
             'initeHour' => '07:00',
             'nextSettle' => 'N',
             'digitable' => $digitable,
             'transactionId' => $transactionId,
-            'type' => $isUtilityBill ? 1 : ($type ?: 2),
+            'type' => $resolvedType,
             'value' => $value,
             'maxValue' => null,
             'minValue' => null,
             'errorCode' => '000',
             'message' => null,
             'status' => 0,
+        ];
+    }
+
+    public static function pixReverseResponse(array $payload, ?string $transactionId = null): array
+    {
+        $scenario = self::scenarioFromPayload($payload, ['scenario', 'mockScenario', 'mock_scenario', 'reason']);
+        if ($scenario !== 'success') {
+            return self::paymentError($scenario);
+        }
+
+        $amount = (float) ($payload['amount'] ?? 0);
+        $clientCode = trim((string) ($payload['clientCode'] ?? ''));
+        $id = trim((string) ($payload['id'] ?? $transactionId ?? gerarHashMock()));
+
+        if ($amount <= 0 || $id === '') {
+            return self::paymentError('failed');
+        }
+
+        $endToEndId = trim((string) ($payload['endToEndId'] ?? '')) ?: ('E13935893' . date('YmdHi') . substr(hash('sha256', $id), 0, 11));
+
+        return [
+            'status' => 'PROCESSING',
+            'version' => '1.0.0',
+            'body' => [
+                'id' => gerarHashMock(),
+                'clientCode' => $clientCode !== '' ? $clientCode : ('REV-' . substr($id, 0, 8)),
+                'amount' => round($amount, 2),
+                'originalId' => $id,
+                'endToEndId' => $endToEndId,
+                'reason' => (string) ($payload['reason'] ?? 'SOLICITADO_PELO_USUARIO'),
+                'reversalDescription' => (string) ($payload['reversalDescription'] ?? ''),
+            ],
+        ];
+    }
+
+    public static function walletEntryResponse(string $account, array $payload): array
+    {
+        $amount = (float) ($payload['amount'] ?? 0);
+        $type = strtoupper(trim((string) ($payload['type'] ?? '')));
+        $clientCode = trim((string) ($payload['clientCode'] ?? ''));
+
+        if ($account === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'Account é obrigatório.'],
+            ];
+        }
+        if ($amount <= 0 || !in_array($type, ['CREDIT', 'DEBIT'], true) || $clientCode === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'amount, type (CREDIT|DEBIT) e clientCode são obrigatórios.'],
+            ];
+        }
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'id' => gerarHashMock(),
+                'clientCode' => $clientCode,
+                'account' => $account,
+                'amount' => round($amount, 2),
+                'type' => $type,
+                'description' => (string) ($payload['description'] ?? ''),
+                'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ];
+    }
+
+    public static function pixDictListByAccountResponse(string $account): array
+    {
+        if (trim($account) === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'Conta é obrigatória.'],
+            ];
+        }
+
+        $entries = [];
+        foreach (self::listEntities('pix_dict_entries') as $entry) {
+            $entryAccount = $entry['account']['account'] ?? null;
+            if ($entryAccount === $account && ($entry['status'] ?? null) !== 'DELETED') {
+                $entries[] = [
+                    'keyType' => $entry['keyType'] ?? null,
+                    'key' => $entry['key'] ?? null,
+                    'account' => $entry['account'] ?? null,
+                    'owner' => $entry['owner'] ?? null,
+                    'createDate' => $entry['account']['createDate'] ?? ($entry['created_at'] ?? null),
+                ];
+            }
+        }
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'pixKeys' => $entries,
+                'totalElements' => count($entries),
+            ],
+        ];
+    }
+
+    public static function pixDictClaimResponse(array $payload, string $kind): array
+    {
+        $allowed = ['open', 'confirm', 'cancel'];
+        if (!in_array($kind, $allowed, true)) {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CSLAB400', 'message' => 'Tipo de claim inválido.'],
+            ];
+        }
+
+        $statusByKind = [
+            'open' => 'OPEN',
+            'confirm' => 'CONFIRMED',
+            'cancel' => 'CANCELLED',
+        ];
+
+        $key = trim((string) ($payload['key'] ?? ''));
+        if ($kind === 'open' && $key === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'key é obrigatório para abrir claim.'],
+            ];
+        }
+
+        $claimId = trim((string) ($payload['id'] ?? $payload['claimId'] ?? '')) ?: gerarHashMock();
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'id' => $claimId,
+                'key' => $key,
+                'status' => $statusByKind[$kind],
+                'claimType' => (string) ($payload['claimType'] ?? 'PORTABILITY'),
+                'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ];
+    }
+
+    public static function pixDictClaimGetResponse(string $id): array
+    {
+        if (trim($id) === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'id é obrigatório.'],
+            ];
+        }
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'id' => $id,
+                'status' => 'OPEN',
+                'claimType' => 'PORTABILITY',
+                'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ];
+    }
+
+    public static function pixDictClaimListResponse(array $query): array
+    {
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'totalElements' => 0,
+                'claims' => [],
+                'page' => (int) ($query['Page'] ?? 1),
+                'limitPerPage' => (int) ($query['LimitPerPage'] ?? 20),
+            ],
+        ];
+    }
+
+    public static function brcodeStaticCreateResponse(array $payload): array
+    {
+        $key = trim((string) ($payload['key'] ?? ''));
+        if ($key === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'key é obrigatório.'],
+            ];
+        }
+
+        $transactionId = (string) random_int(1000000000, 9999999999);
+        $amount = number_format((float) ($payload['amount'] ?? 0), 2, '.', '');
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'transactionId' => $transactionId,
+                'emvqrcps' => self::buildEmv($key, $amount, (string) ($payload['transactionIdentification'] ?? 'PIX' . $transactionId)),
+                'transactionIdentification' => (string) ($payload['transactionIdentification'] ?? 'PIX' . $transactionId),
+                'key' => $key,
+                'amount' => (float) $amount,
+            ],
+        ];
+    }
+
+    public static function brcodeDynamicCreateResponse(array $payload): array
+    {
+        $clientRequestId = trim((string) ($payload['clientRequestId'] ?? '')) ?: gerarHashMock();
+        $key = trim((string) ($payload['key'] ?? ''));
+
+        if ($key === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'key é obrigatório.'],
+            ];
+        }
+
+        $transactionId = gerarHashMock();
+        $pactualId = gerarHashMock();
+        $locationId = substr(hash('sha256', $clientRequestId), 0, 24);
+        $amount = round((float) ($payload['amount'] ?? 0), 2);
+        $expiration = (int) ($payload['expiration'] ?? 86400);
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'clientRequestId' => $clientRequestId,
+                'transactionId' => $transactionId,
+                'pactualId' => $pactualId,
+                'body' => [
+                    'location' => 'qrcode.pix.celcoin.com.br/pixqrcode/v2/cobv/' . $locationId,
+                    'calendar' => ['expiration' => $expiration],
+                    'amount' => ['original' => $amount],
+                    'dynamicBRCodeData' => [
+                        'emvqrcps' => self::buildEmv($key, number_format($amount, 2, '.', ''), $clientRequestId),
+                        'merchantAccountInformation' => [
+                            'url' => 'qrcode.pix.celcoin.com.br/pixqrcode/v2/cobv/' . $locationId,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    public static function chargeCancelResponse(string $txid, array $payload): array
+    {
+        if (trim($txid) === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'txid é obrigatório.'],
+            ];
+        }
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'transactionId' => $txid,
+                'status' => 'CANCELLED',
+                'reason' => (string) ($payload['reason'] ?? ''),
+                'cancelDate' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ];
+    }
+
+    public static function accountUpdateBusinessScenario(array $payload, string $account): array
+    {
+        if (self::accountHasPendingKyc($account)) {
+            return self::accountManagerError('CBE352', 'Não é permitido alterar dados cadastrais para uma conta pendente kyc.');
+        }
+        $scenario = self::scenarioFromPayload($payload, ['scenario', 'mockScenario', 'mock_scenario', 'businessName']);
+        if ($scenario === 'not_found') {
+            return self::accountManagerError('CBE003', 'Conta não encontrada.');
+        }
+        return self::accountManagerOk();
+    }
+
+    public static function accountCloseResponse(string $account, string $reason): array
+    {
+        if ($account === '') {
+            return self::accountManagerError('CBE014', 'Account é obrigatório.');
+        }
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'account' => $account,
+                'reason' => $reason,
+                'closedAt' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ];
+    }
+
+    public static function accountFetchBusinessResponse(string $document): array
+    {
+        if (trim($document) === '') {
+            return self::accountManagerError('CBE014', 'DocumentNumber é obrigatório.');
+        }
+
+        $digits = preg_replace('/\D+/', '', $document) ?? '';
+        $seed = hash('sha256', $digits);
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'documentNumber' => $digits,
+                'businessName' => 'EMPRESA HOMOLOGACAO LTDA',
+                'tradingName' => 'HOMOLOG',
+                'businessEmail' => 'contato@homolog.example',
+                'contactNumber' => '+5511999999999',
+                'account' => self::accountNumberFromSeed($seed),
+                'branch' => '0001',
+                'status' => 'ATIVO',
+                'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ];
+    }
+
+    private static function buildEmv(string $key, string $amount, string $txid): string
+    {
+        $key = substr($key, 0, 77);
+        $merchantInfo = sprintf('0014br.gov.bcb.pix01%02d%s', strlen($key), $key);
+        $additional = sprintf('05%02d%s', strlen($txid), substr($txid, 0, 25));
+
+        return sprintf(
+            '000201%s5204000053039865%s5802BR5910CSLABS-MOCK6009SAO PAULO62%02d%s6304ABCD',
+            sprintf('26%02d%s', strlen($merchantInfo), $merchantInfo),
+            $amount !== '' && $amount !== '0.00' ? sprintf('54%02d%s', strlen($amount), $amount) : '',
+            strlen($additional),
+            $additional
+        );
+    }
+
+    public static function walletBalanceResponse(string $document): array
+    {
+        $document = preg_replace('/\D+/', '', $document) ?? '';
+
+        if ($document === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'DocumentNumber é obrigatório.'],
+            ];
+        }
+
+        $amount = round((hexdec(substr(hash('sha256', $document), 0, 8)) % 1_000_000) / 10, 2);
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => ['amount' => $amount],
+        ];
+    }
+
+    public static function brcodeStaticBase64Response(string $transactionId, string $imageType = 'png'): array
+    {
+        return [
+            'status' => 0,
+            'base64image' => self::onePixelImageBase64($imageType),
+        ];
+    }
+
+    public static function emvDecodeResponse(array $payload): array
+    {
+        $emv = trim((string) ($payload['emv'] ?? ''));
+
+        if ($emv === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'emv é obrigatório.'],
+            ];
+        }
+
+        $seed = hash('sha256', $emv);
+        $isStatic = !str_contains($emv, 'gov.bcb.pix/url') && !preg_match('/[0-9a-f]{8}-/', $emv);
+        $key = self::extractFromEmv($emv) ?? (gerarHashMock());
+        $url = 'pix.celcoin.com.br/pix/v2/' . substr($seed, 0, 24);
+        $amount = round((hexdec(substr($seed, 0, 6)) % 10000) / 100, 2);
+        $txid = 'TXID' . strtoupper(substr($seed, 0, 28));
+
+        return [
+            'type' => $isStatic ? '1' : '2',
+            'collection' => $isStatic ? '0' : '1',
+            'payloadFormatIndicator' => '02',
+            'merchantAccountInformation' => [
+                'url' => $url,
+                'gui' => 'br.gov.bcb.pix',
+                'key' => $key,
+                'additionalInformation' => '',
+                'withdrawalServiceProvider' => null,
+            ],
+            'merchantCategoryCode' => 0,
+            'transactionCurrency' => 0,
+            'transactionAmount' => $amount,
+            'countryCode' => null,
+            'merchantName' => null,
+            'merchantCity' => 'SAO PAULO',
+            'postalCode' => null,
+            'initiationMethod' => null,
+            'transactionIdentification' => $txid,
+        ];
+    }
+
+    public static function collectionPayloadResponse(string $payloadUrl): array
+    {
+        $payloadUrl = trim($payloadUrl);
+        if ($payloadUrl === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'payload é obrigatório.'],
+            ];
+        }
+
+        $seed = hash('sha256', $payloadUrl);
+        $amount = number_format(round((hexdec(substr($seed, 0, 6)) % 10000) / 100, 2), 2, '.', '');
+        $txid = 'TXID' . strtoupper(substr($seed, 0, 28));
+        $key = substr($seed, 0, 8) . '-' . substr($seed, 8, 4) . '-' . substr($seed, 12, 4) . '-' . substr($seed, 16, 4) . '-' . substr($seed, 20, 12);
+        $now = gmdate('Y-m-d\TH:i:s\Z');
+
+        return [
+            'status' => 'ACTIVE',
+            'infoAdicionais' => [],
+            'txid' => $txid,
+            'chave' => $key,
+            'solicitacaoPagador' => null,
+            'valor' => [
+                'original' => $amount,
+                'abatimento' => '0.00',
+                'desconto' => '0.00',
+                'multa' => '0.00',
+                'juros' => '0.00',
+                'final' => $amount,
+                'modalidadeAlteracao' => 0,
+                'retirada' => null,
+            ],
+            'calendario' => [
+                'criacao' => $now,
+                'expiracao' => 300,
+                'apresentacao' => gmdate('Y-m-d\TH:i:s.v\Z'),
+                'validadeAposVencimento' => 0,
+            ],
+            'revisao' => 0,
+        ];
+    }
+
+    private static function extractFromEmv(string $emv): ?string
+    {
+        if (preg_match('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/', $emv, $matches)) {
+            return $matches[0];
+        }
+        return null;
+    }
+
+    private static function onePixelImageBase64(string $type): string
+    {
+        $png = base64_encode(
+            "\x89PNG\r\n\x1a\n" .
+            "\x00\x00\x00\x0dIHDR" .
+            "\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89" .
+            "\x00\x00\x00\x0dIDATx\x9cc\xf8\xcf\xc0\x00\x00\x00\x03\x00\x01\x5f\xe8\x35\xe7" .
+            "\x00\x00\x00\x00IEND\xaeB`\x82"
+        );
+        return $png;
+    }
+
+    public static function spbTransferResponse(array $payload): array
+    {
+        $scenario = self::scenarioFromPayload($payload, ['scenario', 'mockScenario', 'mock_scenario', 'description', 'clientCode']);
+        $amount = (float) ($payload['amount'] ?? 0);
+        $clientCode = trim((string) ($payload['clientCode'] ?? ''));
+        $debit = is_array($payload['debitParty'] ?? null) ? $payload['debitParty'] : [];
+        $credit = is_array($payload['creditParty'] ?? null) ? $payload['creditParty'] : [];
+
+        if ($amount <= 0 || $clientCode === '' || empty($debit['account']) || empty($credit['account'])) {
+            return [
+                'version' => '1.0.0',
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'Campos obrigatórios ausentes para transferência SPB.'],
+            ];
+        }
+
+        $duplicate = self::readEntity('spb_transfers_by_client_code', $clientCode);
+        if (is_array($duplicate) && !empty($duplicate['id']) && ($scenario === 'success' || $scenario === '')) {
+            return [
+                'version' => '1.0.0',
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'CBE100', 'message' => 'Existe um lançamento idêntico pendente. Favor aguarde para realizar esta operação para evitar duplicidade.'],
+            ];
+        }
+
+        if ($scenario === 'fraud') {
+            return ['version' => '1.0.0', 'status' => 'ERROR', 'error' => ['errorCode' => 'CBE171', 'message' => 'Transação bloqueada por suspeita de fraude.']];
+        }
+        if ($scenario === 'blocked') {
+            return ['version' => '1.0.0', 'status' => 'ERROR', 'error' => ['errorCode' => 'CBE172', 'message' => 'Transação bloqueada para a conta informada.']];
+        }
+        if ($scenario === 'failed' || $scenario === 'error') {
+            return ['version' => '1.0.0', 'status' => 'ERROR', 'error' => ['errorCode' => 'CBE100', 'message' => 'Existe um lançamento idêntico pendente. Favor aguarde para realizar esta operação para evitar duplicidade.']];
+        }
+
+        $debitSeed = hash('sha256', (string) $debit['account']);
+        $creditSeed = hash('sha256', (string) $credit['account']);
+
+        return [
+            'status' => 'PROCESSING',
+            'version' => '1.0.0',
+            'body' => [
+                'id' => gerarHashMock(),
+                'amount' => round($amount, 2),
+                'clientCode' => $clientCode,
+                'debitParty' => [
+                    'account' => (string) $debit['account'],
+                    'branch' => (string) ($debit['branch'] ?? '0001'),
+                    'taxId' => (string) ($debit['taxId'] ?? self::deterministicCnpj($debitSeed)),
+                    'name' => (string) ($debit['name'] ?? 'EMPRESA HOMOLOGACAO'),
+                    'accountType' => (string) ($debit['accountType'] ?? 'PG'),
+                    'personType' => (string) ($debit['personType'] ?? 'J'),
+                    'bank' => '13935893',
+                ],
+                'creditParty' => [
+                    'bank' => (string) ($credit['bank'] ?? '00000000'),
+                    'account' => (string) $credit['account'],
+                    'branch' => (string) ($credit['branch'] ?? '0001'),
+                    'taxId' => (string) ($credit['taxId'] ?? self::deterministicCnpj($creditSeed)),
+                    'name' => (string) ($credit['name'] ?? 'BENEFICIARIO HOMOLOGACAO'),
+                    'accountType' => (string) ($credit['accountType'] ?? 'CC'),
+                    'personType' => (string) ($credit['personType'] ?? 'J'),
+                ],
+            ],
+        ];
+    }
+
+    public static function transferNotFoundError(): array
+    {
+        return [
+            'version' => '1.0.0',
+            'status' => 'ERROR',
+            'error' => [
+                'errorCode' => 'CBE106',
+                'message' => 'Não encontramos nenhuma transação através do parâmetro informado.',
+            ],
+        ];
+    }
+
+    public static function pixOldStatusNotFoundError(): array
+    {
+        return [
+            'errorCode' => 'CLP005',
+            'message' => 'Não localizamos nenhum pagamento associado ao parâmetro informado.',
+        ];
+    }
+
+    public static function pixDictCreateResponse(array $payload): array
+    {
+        $account = trim((string) ($payload['account'] ?? ''));
+        $keyType = strtoupper(trim((string) ($payload['keyType'] ?? '')));
+        $key = trim((string) ($payload['key'] ?? ''));
+
+        if ($account === '') {
+            return self::pixDictCreateError('CBE014', 'account é obrigatório e deve conter um formato de texto válido.');
+        }
+
+        $allowed = ['EVP', 'CPF', 'CNPJ', 'EMAIL', 'PHONE'];
+        if (!in_array($keyType, $allowed, true)) {
+            return self::pixDictCreateError('CBE175', 'Chave invalida. Verifique o formato da chave informada.');
+        }
+
+        if ($keyType === 'EVP') {
+            $key = $key !== '' ? $key : gerarHashMock();
+        } else {
+            if ($key === '' || !self::validatePixKey($keyType, $key)) {
+                return self::pixDictCreateError('CBE175', 'Chave invalida. Verifique o formato da chave informada.');
+            }
+        }
+
+        if (self::accountHasPendingKyc($account)) {
+            return self::pixDictCreateError('CBE345', 'Cadastro com pendencias no KYC, favor verificar.');
+        }
+
+        $scenario = self::scenarioFromPayload($payload, ['scenario', 'mockScenario', 'mock_scenario']);
+        if ($scenario === 'fraud') {
+            return self::pixDictCreateError('CBE006', 'Chave bloqueada por suspeita de fraude.');
+        }
+
+        $seed = hash('sha256', $account);
+        $isLegal = (hexdec(substr($seed, 0, 2)) % 3) === 0;
+        $owner = self::pixDictOwnerFromAccount($account, $seed, $isLegal);
+
+        return [
+            'status' => 'CONFIRMED',
+            'body' => [
+                'keyType' => $keyType,
+                'key' => $key,
+                'account' => [
+                    'participant' => '13935893',
+                    'branch' => '0001',
+                    'account' => $account,
+                    'accountType' => 'TRAN',
+                    'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+                ],
+                'owner' => $owner,
+            ],
+            'version' => '1.0.0',
+        ];
+    }
+
+    public static function pixDictDeleteResponse(string $key, ?array $payload = null): array
+    {
+        if (trim($key) === '') {
+            return self::pixDictCreateError('CBE014', 'Chave é obrigatória.');
+        }
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+        ];
+    }
+
+    private static function pixDictCreateError(string $code, string $message): array
+    {
+        return [
+            'status' => 'ERROR',
+            'error' => [
+                'errorCode' => $code,
+                'message' => $message,
+            ],
+            'version' => '1.0.0',
+        ];
+    }
+
+    private static function validatePixKey(string $type, string $key): bool
+    {
+        $digits = preg_replace('/\D+/', '', $key) ?? '';
+        return match ($type) {
+            'CPF' => strlen($digits) === 11,
+            'CNPJ' => strlen($digits) === 14,
+            'EMAIL' => (bool) filter_var($key, FILTER_VALIDATE_EMAIL),
+            'PHONE' => (bool) preg_match('/^\+?\d{12,13}$/', $key),
+            default => true,
+        };
+    }
+
+    private static function pixDictOwnerFromAccount(string $account, string $seed, bool $isLegal): array
+    {
+        if ($isLegal) {
+            return [
+                'type' => 'LEGAL_PERSON',
+                'documentNumber' => self::deterministicCnpj($seed),
+                'name' => self::pickBySeed($seed . 'pj', [
+                    'EMPRESA HOMOLOGACAO LTDA',
+                    'COTA CAPITAL GESTORA DE ATIVOS LTDA',
+                    'AURUSTECH SOLUTIONS LTDA',
+                    'CONTABILIDADE M RODRIGUES LTDA',
+                ]),
+                'tradeName' => self::pickBySeed($seed . 'trade', ['HOMOLOG', 'COTA', 'AURUSTECH']),
+            ];
+        }
+
+        return [
+            'type' => 'NATURAL_PERSON',
+            'documentNumber' => self::deterministicCpf($seed),
+            'name' => self::pickBySeed($seed . 'pf', [
+                'Daniel Eskelsen',
+                'Luan Lima da Silva',
+                'Maria Silva',
+                'Joao Souza Santos',
+            ]),
+        ];
+    }
+
+    private static function deterministicCpf(string $seed): string
+    {
+        $digits = '';
+        for ($i = 0; strlen($digits) < 11; $i++) {
+            $digits .= (string) (hexdec(substr($seed, $i % 32 * 2, 2)) % 10);
+        }
+        return substr($digits, 0, 11);
+    }
+
+    private static function deterministicCnpj(string $seed): string
+    {
+        $digits = '';
+        for ($i = 0; strlen($digits) < 14; $i++) {
+            $digits .= (string) (hexdec(substr($seed, $i % 32 * 2, 2)) % 10);
+        }
+        return substr($digits, 0, 14);
+    }
+
+    public static function accountManagerOk(): array
+    {
+        return [
+            'version' => '1.0.0',
+            'status' => 'SUCCESS',
+        ];
+    }
+
+    public static function accountManagerError(string $code, string $message): array
+    {
+        return [
+            'status' => 'ERROR',
+            'version' => '1.0.0',
+            'error' => [
+                'errorCode' => $code,
+                'message' => $message,
+            ],
+        ];
+    }
+
+    public static function accountStatusScenario(array $payload, string $account): array
+    {
+        $status = strtoupper(trim((string) ($payload['status'] ?? '')));
+        $reason = trim((string) ($payload['reason'] ?? ''));
+
+        if (!in_array($status, ['ATIVO', 'BLOQUEADO'], true)) {
+            return self::accountManagerError('CBE014', 'status é obrigatório (ATIVO|BLOQUEADO).');
+        }
+        if ($reason === '') {
+            return self::accountManagerError('CBE014', 'reason é obrigatório e deve conter um formato de texto válido.');
+        }
+
+        $scenario = self::scenarioFromPayload($payload, [
+            'scenario',
+            'mockScenario',
+            'mock_scenario',
+            'reason',
+        ]);
+
+        if ($scenario === 'blocked' || self::accountHasPendingKyc($account)) {
+            return self::accountManagerError('CBE345', 'Cadastro com pendencias no KYC, favor verificar.');
+        }
+        if ($scenario === 'not_found') {
+            return self::accountManagerError('CBE003', 'Conta não encontrada.');
+        }
+        if ($scenario === 'fraud') {
+            return self::accountManagerError('CBE006', 'Conta bloqueada por suspeita de fraude.');
+        }
+        if ($scenario === 'failed' || $scenario === 'error') {
+            return self::accountManagerError('CBE015', 'Erro interno ao atualizar status da conta.');
+        }
+
+        return self::accountManagerOk();
+    }
+
+    public static function accountUpdateNaturalPersonScenario(array $payload, string $account): array
+    {
+        $scenario = self::scenarioFromPayload($payload, [
+            'scenario',
+            'mockScenario',
+            'mock_scenario',
+            'fullName',
+        ]);
+
+        if ($scenario === 'blocked' || self::accountHasPendingKyc($account)) {
+            return self::accountManagerError('CBE352', 'Não é permitido alterar dados cadastrais para uma conta pendente kyc.');
+        }
+        if ($scenario === 'not_found') {
+            return self::accountManagerError('CBE003', 'Conta não encontrada.');
+        }
+        if ($scenario === 'failed') {
+            return self::accountManagerError('CBE001', 'Dados de atualização inválidos.');
+        }
+
+        return self::accountManagerOk();
+    }
+
+    private static function accountHasPendingKyc(string $account): bool
+    {
+        if ($account === '') {
+            return false;
+        }
+        $digits = preg_replace('/\D+/', '', $account) ?? '';
+        if ($digits === '') {
+            return false;
+        }
+        return ((int) substr($digits, -1)) % 4 === 0;
+    }
+
+    public static function onboardingResponse(array $payload, string $kind): array
+    {
+        $scenario = self::scenarioFromPayload($payload, [
+            'scenario',
+            'mockScenario',
+            'mock_scenario',
+            'fullName',
+            'businessName',
+            'documentNumber',
+        ]);
+
+        $missing = $kind === 'business'
+            ? self::missingOnboardingBusinessFields($payload)
+            : self::missingOnboardingNaturalPersonFields($payload);
+
+        if ($missing !== null) {
+            return self::onboardingValidationError($missing);
+        }
+
+        if ($scenario !== 'success') {
+            return self::onboardingError($scenario);
+        }
+
+        return [
+            'version' => '1.0.0',
+            'status' => 'PROCESSING',
+            'body' => [
+                'onBoardingId' => gerarHashMock(),
+            ],
+        ];
+    }
+
+    public static function generateAccountNumber(string $seed): string
+    {
+        return self::accountNumberFromSeed($seed);
+    }
+
+    public static function chargeResponse(array $payload): array
+    {
+        $scenario = self::scenarioFromPayload($payload, [
+            'scenario',
+            'mockScenario',
+            'mock_scenario',
+            'externalId',
+            'key',
+        ]);
+
+        if ($scenario !== 'success') {
+            return self::chargeError($scenario);
+        }
+
+        $amount = (float) ($payload['amount'] ?? 0);
+        $externalId = trim((string) ($payload['externalId'] ?? ''));
+        $key = trim((string) ($payload['key'] ?? ''));
+
+        if ($amount <= 0 || $externalId === '' || $key === '') {
+            return self::chargeError('failed');
+        }
+
+        return [
+            'body' => [
+                'transactionId' => gerarHashMock(),
+            ],
+            'version' => '1.1.0',
+            'status' => 'SUCCESS',
+        ];
+    }
+
+    public static function billPaymentResponse(array $payload): array
+    {
+        $scenario = self::scenarioFromPayload($payload, [
+            'scenario',
+            'mockScenario',
+            'mock_scenario',
+            'clientRequestId',
+            'account',
+        ]);
+
+        if ($scenario !== 'success') {
+            return self::billPaymentError($scenario);
+        }
+
+        $amount = (float) ($payload['amount'] ?? 0);
+        $clientRequestId = trim((string) ($payload['clientRequestId'] ?? ''));
+        $transactionIdAuthorize = $payload['transactionIdAuthorize'] ?? null;
+        $digitable = (string) self::arrayGet($payload, 'barCodeInfo.digitable');
+
+        if ($amount <= 0 || $clientRequestId === '' || $transactionIdAuthorize === null || $digitable === '') {
+            return self::billPaymentError('failed');
+        }
+
+        return [
+            'body' => [
+                'id' => gerarHashMock(),
+                'clientRequestId' => $clientRequestId,
+                'amount' => round($amount, 2),
+                'transactionIdAuthorize' => is_numeric($transactionIdAuthorize) ? (int) $transactionIdAuthorize : $transactionIdAuthorize,
+                'barCodeInfo' => ['digitable' => $digitable],
+            ],
+            'status' => 'PROCESSING',
+            'version' => '1.1.0',
+        ];
+    }
+
+    public static function boletoBankLine(string $transactionId, float $amount, string $dueDate): string
+    {
+        $seed = hash('sha256', $transactionId . '|' . $amount . '|' . $dueDate);
+        $digits = '';
+
+        for ($i = 0, $len = strlen($seed); $i < $len && strlen($digits) < 47; $i++) {
+            $char = $seed[$i];
+            if (ctype_digit($char)) {
+                $digits .= $char;
+            } else {
+                $digits .= (string) (ord($char) % 10);
+            }
+        }
+
+        $digits = str_pad($digits, 47, '0');
+
+        return sprintf(
+            '%s.%s %s.%s %s.%s %s %s',
+            substr($digits, 0, 5),
+            substr($digits, 5, 5),
+            substr($digits, 10, 5),
+            substr($digits, 15, 6),
+            substr($digits, 21, 5),
+            substr($digits, 26, 6),
+            substr($digits, 32, 1),
+            substr($digits, 33, 14)
+        );
+    }
+
+    public static function billPaymentStatusRender(array $state, bool $confirmed): array
+    {
+        $body = [
+            'id' => $state['id'],
+            'clientRequestId' => $state['clientRequestId'],
+            'account' => is_numeric($state['account']) ? (int) $state['account'] : $state['account'],
+            'amount' => round((float) $state['amount'], 2),
+            'transactionIdAuthorize' => is_numeric($state['transactionIdAuthorize'] ?? '') ? (int) $state['transactionIdAuthorize'] : $state['transactionIdAuthorize'],
+            'hasOccurrence' => (bool) ($state['hasOccurrence'] ?? false),
+            'barCodeInfo' => ['digitable' => $state['digitable'] ?? ''],
+        ];
+
+        if ($confirmed) {
+            $body['paymentDate'] = $state['paymentDate'] ?? gmdate('Y-m-d\TH:i:s\Z');
+        }
+
+        return [
+            'body' => $body,
+            'status' => $confirmed ? 'CONFIRMED' : 'PROCESSING',
+            'version' => '1.1.0',
         ];
     }
 
@@ -531,7 +1474,7 @@ class Cslabs
         return filter_var($url, FILTER_VALIDATE_URL) ? $url : null;
     }
 
-    public static function saveWebhookSubscription(string $entity, string $url, ?array $auth = null, array $raw = []): array
+    public static function saveWebhookSubscription(string $entity, string $url, ?array $auth = null, array $raw = [], bool $active = true): array
     {
         $existing = self::webhookSubscription($entity);
         $now = date(DATE_ATOM);
@@ -540,6 +1483,7 @@ class Cslabs
             'entity' => $entity,
             'webhookUrl' => $url,
             'auth' => $auth,
+            'active' => $active,
             'known_entity' => in_array($entity, $knownEntities, true),
             'updated_at' => $now,
             'created_at' => is_array($existing) ? ($existing['created_at'] ?? $now) : $now,
@@ -549,6 +1493,96 @@ class Cslabs
         self::writeEntity('webhook_subscriptions', $entity, $record);
 
         return $record;
+    }
+
+    public static function sampleWebhookBody(string $entity, string $status): array
+    {
+        $id = gerarHashMock();
+        $now = gmdate('Y-m-d\TH:i:s\Z');
+
+        return match ($entity) {
+            'onboarding-create' => [
+                'onboardingId' => $id,
+                'clientCode' => 'CLI-' . substr($id, 0, 8),
+                'account' => ['account' => substr(hash('sha256', $id), 0, 9), 'branch' => '0001'],
+            ],
+            'onboarding-backgroundcheck', 'onboarding-documentscopy', 'onboarding-proposal' => [
+                'proposalId' => $id,
+                'proposalType' => 'PF',
+                'rejectedReason' => $status === 'REPROVED' ? ['Documento inválido'] : [],
+                'urlDocumentscopy' => $entity === 'onboarding-documentscopy' && $status === 'PENDING' ? 'https://homolog.celcoin/docscopy/' . $id : null,
+            ],
+            'kyc' => [
+                'onboardingId' => $id,
+            ],
+            'pix-payment-in', 'pix-payment-out' => [
+                'id' => $id,
+                'amount' => 25.00,
+                'endToEndId' => 'E13935893' . date('YmdHi') . substr($id, 0, 11),
+                'creditParty' => ['account' => '443168490', 'key' => 'demo@pix.com', 'taxId' => '06170097914', 'name' => 'Daniel Eskelsen', 'branch' => '0001', 'bank' => '13935893', 'accountType' => 'CACC'],
+                'debitParty' => ['account' => '443168489', 'taxId' => '12345678000195', 'name' => 'EMPRESA HOMOLOG', 'branch' => '0001', 'bank' => '13935893', 'accountType' => 'CACC'],
+            ],
+            'internal-transfer-out', 'internal-transfer-in' => [
+                'amount' => 4.5,
+                'description' => 'Transferencia interna',
+                'creditParty' => ['account' => '443168490'],
+                'debitParty' => ['account' => '443168489'],
+            ],
+            'spb-transfer-out', 'spb-transfer-in' => [
+                'id' => $id,
+                'originalId' => $id,
+                'amount' => 100.0,
+                'clientCode' => 'T-' . substr($id, 0, 8),
+                'creditParty' => ['account' => '12345-6', 'branch' => '0001', 'bank' => '60701190', 'taxId' => '06170097914', 'name' => 'Daniel Eskelsen', 'accountType' => 'CC'],
+                'debitParty' => ['account' => '300541554121', 'branch' => '0001', 'bank' => '13935893', 'taxId' => '49966300000119', 'name' => 'TOTALIS', 'accountType' => 'PG'],
+            ],
+            'spb-reversal-in', 'spb-reversal-out' => [
+                'id' => $id,
+                'originalId' => $id,
+                'amount' => 50.0,
+                'creditParty' => ['account' => '12345-6'],
+                'debitParty' => ['account' => '300541554121'],
+            ],
+            'charge-create' => [
+                'transactionId' => $id,
+                'externalId' => '0000000001',
+                'boleto' => [
+                    'bankLine' => self::boletoBankLine($id, 50.0, date('Y-m-d')),
+                    'bankAccount' => '443168489',
+                    'bankAgency' => '0001',
+                    'status' => 'PENDING',
+                ],
+            ],
+            'charge-in', 'charge-canceled' => [
+                'transactionId' => $id,
+                'status' => $entity === 'charge-in' ? 'Pago' : 'Cancelado',
+                'valorPago' => 50.0,
+            ],
+            'billpayment', 'billpayment-occurrence' => [
+                'clientRequestId' => substr($id, 0, 12),
+                'amount' => 1763.66,
+                'id' => $id,
+                'idOriginal' => $id,
+            ],
+            'account-status' => [
+                'account' => '443168489',
+                'status' => $status === 'CONFIRMED' ? 'ATIVO' : 'BLOQUEADO',
+                'reason' => 'Segurança',
+            ],
+            default => ['id' => $id, 'timestamp' => $now],
+        };
+    }
+
+    public static function deleteWebhookSubscription(string $entity): bool
+    {
+        $clientId = self::context()['client_id'];
+        $path = self::clientRoot($clientId) . '/entities/webhook_subscriptions/' . self::safeName($entity) . '.json';
+
+        if (!is_file($path)) {
+            return false;
+        }
+
+        return unlink($path);
     }
     public static function scheduleWebhook(string $event, array $payload, int $delaySeconds = 2, ?string $url = null): bool
     {
@@ -560,6 +1594,8 @@ class Cslabs
         $requestId = $context['request_id'];
         $clientId = $context['client_id'];
         $webhookId = 'wh_' . bin2hex(random_bytes(8));
+        $subscription = self::webhookSubscription($event);
+        $auth = is_array($subscription) && is_array($subscription['auth'] ?? null) ? $subscription['auth'] : null;
 
         self::registerWebhook([
             'webhook_id' => $webhookId,
@@ -573,14 +1609,14 @@ class Cslabs
             'delay_seconds' => $delaySeconds,
         ]);
 
-        register_shutdown_function(function () use ($url, $payload, $event, $requestId, $clientId, $webhookId, $delaySeconds): void {
+        register_shutdown_function(function () use ($url, $payload, $event, $requestId, $clientId, $webhookId, $delaySeconds, $auth): void {
             if (function_exists('fastcgi_finish_request')) {
                 fastcgi_finish_request();
             }
 
             sleep(max(0, $delaySeconds));
             $sentAt = date(DATE_ATOM);
-            $result = self::sendJsonRequest($url, $payload);
+            $result = self::sendJsonRequest($url, $payload, $auth);
 
             $entry = [
                 'webhook_id' => $webhookId,
@@ -689,6 +1725,122 @@ class Cslabs
         ];
     }
 
+    private static function missingOnboardingNaturalPersonFields(array $payload): ?string
+    {
+        $required = [
+            'clientCode' => 'clientCode',
+            'documentNumber' => 'documentNumber',
+            'phoneNumber' => 'phoneNumber',
+            'email' => 'email',
+            'motherName' => 'motherName',
+            'fullName' => 'fullName',
+            'birthDate' => 'birthDate',
+        ];
+
+        foreach ($required as $field => $label) {
+            if (trim((string) ($payload[$field] ?? '')) === '') {
+                return $label;
+            }
+        }
+
+        return self::missingAddressField($payload['address'] ?? null);
+    }
+
+    private static function missingOnboardingBusinessFields(array $payload): ?string
+    {
+        $required = [
+            'clientCode' => 'clientCode',
+            'documentNumber' => 'documentNumber',
+            'contactNumber' => 'contactNumber',
+            'businessEmail' => 'businessEmail',
+            'businessName' => 'businessName',
+        ];
+
+        foreach ($required as $field => $label) {
+            if (trim((string) ($payload[$field] ?? '')) === '') {
+                return $label;
+            }
+        }
+
+        $owner = $payload['owner'] ?? null;
+        if (!is_array($owner) || $owner === []) {
+            return 'owner';
+        }
+
+        return self::missingAddressField($payload['businessAddress'] ?? null);
+    }
+
+    private static function missingAddressField(mixed $address): ?string
+    {
+        if (!is_array($address)) {
+            return 'address';
+        }
+
+        foreach (['postalCode', 'street', 'number', 'neighborhood', 'city', 'state'] as $field) {
+            if (trim((string) ($address[$field] ?? '')) === '') {
+                return $field;
+            }
+        }
+
+        return null;
+    }
+
+    private static function onboardingValidationError(string $field): array
+    {
+        return [
+            'status' => 'ERROR',
+            'version' => '1.0.0',
+            'error' => [
+                'errorCode' => 'CBE014',
+                'message' => $field . ' é obrigatório e deve conter um formato de texto válido.',
+            ],
+        ];
+    }
+
+    private static function onboardingError(string $scenario): array
+    {
+        $errors = [
+            'fraud' => ['CBE006', 'Onboarding bloqueado por suspeita de fraude.'],
+            'not_found' => ['CBE003', 'Cliente não encontrado para o documento informado.'],
+            'blocked' => ['CBE007', 'Conta já existe ou está bloqueada para este documento.'],
+            'failed' => ['CBE001', 'Dados de onboarding inválidos.'],
+            'error' => ['CBE015', 'Erro interno ao processar onboarding.'],
+        ];
+
+        [$code, $message] = $errors[$scenario] ?? $errors['error'];
+
+        return [
+            'status' => 'ERROR',
+            'version' => '1.0.0',
+            'error' => [
+                'errorCode' => $code,
+                'message' => $message,
+            ],
+        ];
+    }
+
+    private static function chargeError(string $scenario): array
+    {
+        $errors = [
+            'fraud' => ['CSLAB403', 'Emissão bloqueada por suspeita de fraude.'],
+            'not_found' => ['CSLAB404', 'Conta ou chave Pix não encontrada.'],
+            'blocked' => ['CSLAB423', 'Conta bloqueada para emissão.'],
+            'failed' => ['CSLAB400', 'Dados obrigatórios inválidos para emissão de boleto.'],
+            'error' => ['CSLAB500', 'Erro interno ao emitir boleto.'],
+        ];
+
+        [$code, $message] = $errors[$scenario] ?? $errors['error'];
+
+        return [
+            'status' => 'ERROR',
+            'error' => [
+                'errorCode' => $code,
+                'message' => $message,
+            ],
+            'version' => '1.0.0',
+        ];
+    }
+
     private static function billPaymentValue(string $digits, string $seed): float
     {
         if (str_starts_with($digits, '8') && strlen($digits) >= 15) {
@@ -710,7 +1862,7 @@ class Cslabs
         return round((1000 + (hexdec(substr($seed, 8, 6)) % 190000)) / 100, 2);
     }
 
-    private static function billPaymentDueDate(string $digits, string $seed): string
+    private static function billPaymentDueIso(string $digits, string $seed): string
     {
         $days = 3 + (hexdec(substr($seed, 14, 4)) % 40);
 
@@ -722,31 +1874,59 @@ class Cslabs
                 $resolved = strtotime('+' . $factor . ' days', $base);
 
                 if ($resolved !== false && $resolved >= strtotime('-30 days') && $resolved <= strtotime('+5 years')) {
-                    return date('m/d/Y', $resolved);
+                    return date('Y-m-d\T00:00:00', $resolved);
                 }
             }
         }
 
-        return date('m/d/Y', strtotime('+' . $days . ' days'));
+        return date('Y-m-d\T00:00:00', strtotime('+' . $days . ' days'));
     }
 
-    private static function billPaymentRegisterData(string $assignor, float $value, string $dueDate, string $seed): array
+    private static function billPaymentRegisterData(string $assignor, float $value, string $dueIso, string $seed): array
     {
         $discount = (hexdec(substr($seed, 18, 2)) % 3) === 0 ? round($value * 0.02, 2) : 0;
         $interest = (hexdec(substr($seed, 20, 2)) % 4) === 0 ? round($value * 0.01, 2) : 0;
         $fine = (hexdec(substr($seed, 22, 2)) % 5) === 0 ? round($value * 0.02, 2) : 0;
+        $additional = round($interest + $fine, 2);
+        $totalUpdated = round($value - $discount + $additional, 2);
+        $payDueDate = date('Y-m-d\T00:00:00', strtotime('+10 years', strtotime($dueIso)));
+        $allowChangeValue = (hexdec(substr($seed, 24, 2)) % 4) === 0;
+        $recipientDoc = self::pickBySeed($seed . 'recipient', ['60746948000112', '17189525000168', '00000000000191']);
+        $payerDoc = self::pickBySeed($seed . 'document', ['06170097914', '11144477735', '12345678000195']);
 
         return [
+            'documentRecipient' => self::formatDocument($recipientDoc),
+            'documentPayer' => self::formatDocument($payerDoc),
+            'payDueDate' => $payDueDate,
+            'dueDateRegister' => $dueIso,
+            'allowChangeValue' => $allowChangeValue,
             'recipient' => $assignor,
-            'documentRecipient' => self::pickBySeed($seed . 'recipient', ['60746948000112', '17189525000168', '00000000000191']),
-            'payer' => self::pickBySeed($seed . 'payer', ['CLIENTE HOMOLOGACAO', 'MARIA SILVA', 'JOAO SOUZA']),
-            'documentPayer' => self::pickBySeed($seed . 'document', ['06170097914', '11144477735', '12345678000195']),
-            'originalValue' => $value,
+            'payer' => self::pickBySeed($seed . 'payer', ['CLIENTE HOMOLOGACAO', 'MARIA SILVA', 'JOAO SOUZA SANTOS', 'EMPRESA HOMOLOGACAO LTDA']),
             'discountValue' => $discount,
             'interestValueCalculated' => $interest,
+            'maxValue' => $allowChangeValue ? round($totalUpdated * 1.05, 2) : $totalUpdated,
+            'minValue' => $allowChangeValue ? round($totalUpdated * 0.95, 2) : $totalUpdated,
             'fineValueCalculated' => $fine,
-            'dueDate' => $dueDate,
+            'originalValue' => $value,
+            'totalUpdated' => $totalUpdated,
+            'totalWithDiscount' => $discount > 0 ? round($value - $discount, 2) : 0,
+            'totalWithAdditional' => $additional,
         ];
+    }
+
+    private static function formatDocument(string $digits): string
+    {
+        $digits = preg_replace('/\D+/', '', $digits) ?? '';
+
+        if (strlen($digits) === 14) {
+            return sprintf('%s.%s.%s/%s-%s', substr($digits, 0, 2), substr($digits, 2, 3), substr($digits, 5, 3), substr($digits, 8, 4), substr($digits, 12, 2));
+        }
+
+        if (strlen($digits) === 11) {
+            return sprintf('%s.%s.%s-%s', substr($digits, 0, 3), substr($digits, 3, 3), substr($digits, 6, 3), substr($digits, 9, 2));
+        }
+
+        return $digits;
     }
 
     private static function pickBySeed(string $seed, array $items): mixed
@@ -973,10 +2153,23 @@ class Cslabs
         Json::write($directory . '/' . self::safeName($requestId) . '.json', $interaction);
     }
 
-    private static function sendJsonRequest(string $url, array $payload): array
+    private static function sendJsonRequest(string $url, array $payload, ?array $auth = null): array
     {
         $curl = curl_init();
         $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $headers = [
+            'Accept: application/json',
+            'Content-Type: application/json',
+            'Content-Length: ' . strlen((string) $body),
+        ];
+
+        if (is_array($auth) && strtolower((string) ($auth['type'] ?? '')) === 'basic') {
+            $login = (string) ($auth['login'] ?? '');
+            $password = (string) ($auth['pwd'] ?? $auth['password'] ?? '');
+            if ($login !== '') {
+                $headers[] = 'Authorization: Basic ' . base64_encode($login . ':' . $password);
+            }
+        }
 
         curl_setopt_array($curl, [
             CURLOPT_URL => $url,
@@ -987,11 +2180,7 @@ class Cslabs
             CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
             CURLOPT_CUSTOMREQUEST => 'POST',
             CURLOPT_POSTFIELDS => $body,
-            CURLOPT_HTTPHEADER => [
-                'Accept: application/json',
-                'Content-Type: application/json',
-                'Content-Length: ' . strlen((string) $body),
-            ],
+            CURLOPT_HTTPHEADER => $headers,
         ]);
 
         $response = curl_exec($curl);
