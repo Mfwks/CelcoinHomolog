@@ -54,20 +54,31 @@ if ($externalId !== '') {
 }
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('charge-create');
-$webhookPayload = [
-    'entity' => 'charge-create',
-    'status' => 'SUCCESS',
-    'body' => [
-        'transactionId' => $transactionId,
-        'externalId' => $externalId,
-        'boleto' => [
-            'bankLine' => $bankLine,
-            'bankAccount' => $receiverAccount,
-            'bankAgency' => '0001',
-            'status' => 'PENDING',
-        ],
+$webhookPayload = Cslabs::webhookEnvelope('charge-create', 'PENDING', [
+    'amount' => $amount,
+    'boleto' => [
+        'transactionId' => (string) random_int(100000, 999999),
+        'status' => 'PENDING',
+        'bankLine' => $bankLine,
+        'bankNumber' => substr($transactionId, 0, 9),
+        'barCode' => null,
+        'bankEmissor' => 'itauAgreement',
+        'bankAgency' => '0001',
+        'bankAccount' => $receiverAccount,
+        'bankAssignor' => 'CELCOIN INSTITUIÇÃO DE PAGAMENTO - SA',
     ],
-];
+    'debtor' => $body['debtor'] ?? null,
+    'duedate' => (string) ($body['duedate'] ?? '') . ' 00:00:00',
+    'expirationAfterPayment' => 1,
+    'pix' => [
+        'status' => 'PENDING',
+        'key' => (string) ($body['key'] ?? ''),
+    ],
+    'receiver' => $body['receiver'] ?? null,
+    'externalId' => $externalId,
+    'status' => 'PENDING',
+    'transactionId' => $transactionId,
+]);
 
 Cslabs::scheduleWebhook('charge-create', $webhookPayload, 2, $webhookUrl);
 

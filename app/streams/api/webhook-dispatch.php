@@ -58,11 +58,8 @@ if (!$url) {
     return;
 }
 
-$webhookPayload = [
-    'entity' => $entity,
-    'status' => $scenario,
-    'body' => $payloadBody !== [] ? $payloadBody : Cslabs::sampleWebhookBody($entity, $scenario),
-];
+$bodyForWebhook = $payloadBody !== [] ? $payloadBody : Cslabs::sampleWebhookBody($entity, $scenario);
+$webhookPayload = Cslabs::webhookEnvelope($entity, $scenario, $bodyForWebhook);
 
 if (isset($body['error']) && is_array($body['error'])) {
     $webhookPayload['error'] = $body['error'];

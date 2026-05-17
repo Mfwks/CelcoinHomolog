@@ -19,11 +19,12 @@ if (($response['status'] ?? null) === 'ERROR') {
 }
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('pix-reversal-out');
-Cslabs::scheduleWebhook('pix-reversal-out', [
-    'entity' => 'pix-reversal-out',
-    'status' => 'CONFIRMED',
-    'body' => $response['body'],
-], 3, $webhookUrl);
+Cslabs::scheduleWebhook(
+    'pix-reversal-out',
+    Cslabs::webhookEnvelope('pix-reversal-out', 'CONFIRMED', $response['body']),
+    3,
+    $webhookUrl
+);
 
 http_response_code(201);
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

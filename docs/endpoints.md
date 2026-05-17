@@ -25,6 +25,7 @@ O microframework não restringe método HTTP no roteador; o método aceito é de
 | POST    | `/api-integration-baas-webservice/v1/charge`                                         | `api/charge`                 | `emissaoBoletoCobranca`                   |
 | GET     | `/pix/v1/dict/v2/key`                                                                | `api/key-old`                | `consultarChave` (antigo)                 |
 | GET     | `/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/external/{account}/`            | `api/key`                    | Consulta de chave PIX (DICT BaaS)         |
+| GET     | `/baas/v2/pix/dict/entry/external/{account}[/]`                                      | `api/key`                    | Consulta de chave PIX (alias v2)          |
 | POST    | `/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry`                                | `api/dict-entry-create`      | Criar chave Pix                           |
 | DELETE  | `/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/{key}`                          | `api/dict-entry-delete`      | Excluir chave Pix                         |
 | POST    | `/pix/v1/payment`                                                                    | `api/payment`                | `enviarPix`                               |

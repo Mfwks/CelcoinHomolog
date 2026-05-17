@@ -57,15 +57,16 @@ if ($documentNumber !== '') {
 }
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('onboarding-create');
-$webhookPayload = [
-    'entity' => 'onboarding-create',
-    'status' => 'CONFIRMED',
-    'body' => [
-        'onboardingId' => $onboardingId,
-        'clientCode' => $clientCode,
-        'account' => $record['account'],
-    ],
-];
+$webhookPayload = Cslabs::webhookEnvelope('onboarding-create', 'CONFIRMED', [
+    'account' => array_merge($record['account'], [
+        'name' => (string) ($body['socialName'] ?? $body['name'] ?? ''),
+        'documentNumber' => $documentNumber,
+        'ispb' => '13935893',
+    ]),
+    'onboardingId' => $onboardingId,
+    'clientCode' => $clientCode,
+    'createDate' => $record['created_at'],
+]);
 
 Cslabs::scheduleWebhook('onboarding-create', $webhookPayload, 3, $webhookUrl);
 

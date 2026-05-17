@@ -24,11 +24,16 @@ if (($response['status'] ?? null) === 'SUCCESS') {
         Cslabs::writeEntity('charges', $txid, $existing);
     }
 
-    Cslabs::scheduleWebhook('charge-canceled', [
-        'entity' => 'charge-canceled',
-        'status' => 'CONFIRMED',
-        'body' => ['transactionId' => $txid, 'status' => 'Cancelado', 'reason' => (string) ($body['reason'] ?? '')],
-    ], 2, Cslabs::webhookSubscriptionUrl('charge-canceled'));
+    Cslabs::scheduleWebhook(
+        'charge-canceled',
+        Cslabs::webhookEnvelope('charge-canceled', 'CONFIRMED', [
+            'transactionId' => $txid,
+            'status' => 'CANCELLED',
+            'reason' => (string) ($body['reason'] ?? ''),
+        ]),
+        2,
+        Cslabs::webhookSubscriptionUrl('charge-canceled')
+    );
 }
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

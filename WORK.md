@@ -8,11 +8,14 @@ Arquivo vivo, três seções. Cada linha: `YYYY-MM-DD · descrição curta · re
 
 ## Próximo
 
-- 2026-05-16 · Logs necessários para confirmar shape: bulk onboarding (3 variantes), proposal endpoints, KYC fileupload, wallet movement/ConsolidatedStatement/exportfile/income-report, claims (5 endpoints), pix reverse (2 variantes), QR criar (estático/dinâmico), DELETE charge, AccountManager business/close/fetch-business, SPB reversal.
-- 2026-05-16 · Adicionar `/baas/v2/pix/dict/entry/external/{conta}/` como alias da consulta DICT BaaS já implementada.
+- 2026-05-17 · Logs necessários para confirmar shape: bulk onboarding (3 variantes), proposal endpoints, KYC fileupload, wallet movement/ConsolidatedStatement/exportfile/income-report, claims (5 endpoints), pix reverse (2 variantes), QR criar (estático/dinâmico), DELETE charge, AccountManager business/close/fetch-business, SPB reversal.
 
 ## Concluído recente
 
+- 2026-05-17 · Streams marcados como "shape inferido" revisados contra a doc oficial: `pixReverseResponse` ganhou `originalPaymentId`/`returnIdentification`/`additionalInformation` e default `reason=MD06`; `pixDictClaimResponse` expandiu com `claimerAccount`/`claimer`/`donorParticipant`/períodos + helper `buildPixDictClaimBody` que aplica grafia Pascal no `keyType` da response (EMAIL→Email, PHONE→Phone); `brcodeDynamicCreateResponse` retorna `amount.original` como string (`"5000.00"`); `walletEntryResponse` agora retorna status `CONFIRMED`; `accountFetchBusinessResponse` aceita `Account` ou `DocumentNumber` e devolve `businessAddress`+`owner[]`; `pixDictClaimListResponse` com default `limitPerPage=10`.
+- 2026-05-17 · `gap-homologacao.md` atualizado com referências da doc pública v2 (`developers.celcoin.com.br/reference/`) por endpoint, mapa legado×v2 e inconsistências reais a preservar (cadastraChavePix em PT, keyType Pascal na response DICT, amount string em QR dinâmico, grafias do timestamp, etc.). Sem mexer em código.
+- 2026-05-17 · Webhooks alinhados aos logs reais: envelope `{entity, createTime[s|S]tamp (grafia varia por entity), status, body, webhookId}` centralizado em `Cslabs::webhookEnvelope`. `sampleWebhookBody` agora carrega shapes reais para 9 entities (onboarding-create, pix-payment-in/out, internal-transfer-out, spb-transfer-in/out, spb-reversal-in, charge-create/in, billpayment). Bug do `internal-transfer` corrigido (entity `wallet.internal.transfer.completed` → `internal-transfer-out`). 12 callers refatorados.
+- 2026-05-17 · Alias `/baas/v2/pix/dict/entry/external/{account}[/]` registrado apontando para o stream `api/key` (mesma consulta DICT BaaS).
 - 2026-05-16 · Endpoints sem log implementados com shape inferido do spec: pix reverse (BaaS + legado), wallet entry, DICT listar + claims (5 endpoints), QR estático/dinâmico criar (com EMV gerado), location/base64, DELETE charge, AccountManager business/close/fetch-business. Marcar para revisão quando logs reais chegarem.
 - 2026-05-16 · Basic Auth aplicado no `Cslabs::sendJsonRequest`: webhooks despachados usam a credencial da inscrição.
 - 2026-05-16 · Disparador de webhooks de saída: `POST /cslabs/webhook/dispatch` + templates por entity em `Cslabs::sampleWebhookBody`. Subscription com flag `active` e DELETE.

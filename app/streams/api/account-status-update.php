@@ -37,15 +37,11 @@ Cslabs::writeEntity('account_status', $account, [
 ]);
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('account-status');
-$webhookPayload = [
-    'entity' => 'account-status',
-    'status' => 'CONFIRMED',
-    'body' => [
-        'account' => $account,
-        'status' => strtoupper((string) $body['status']),
-        'reason' => (string) ($body['reason'] ?? ''),
-    ],
-];
+$webhookPayload = Cslabs::webhookEnvelope('account-status', 'CONFIRMED', [
+    'account' => $account,
+    'status' => strtoupper((string) $body['status']),
+    'reason' => (string) ($body['reason'] ?? ''),
+]);
 
 Cslabs::scheduleWebhook('account-status', $webhookPayload, 2, $webhookUrl);
 

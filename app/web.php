@@ -84,6 +84,8 @@ $web->add('/pix/v1/emv','api/emv');
 $web->add('/pix/v1/collection/immediate/payload/{payload}','api/collection-payload');
 $web->add('/pix/v1/collection/duedate/payload/{payload}','api/collection-payload');
 $web->add('/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/external/{account}/','api/key');
+$web->add('/baas/v2/pix/dict/entry/external/{account}/','api/key'); // alias legado/v2
+$web->add('/baas/v2/pix/dict/entry/external/{account}','api/key');
 $web->add('/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry','api/dict-entry-create');
 $web->add('/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/{key}','api/dict-entry-delete');
 

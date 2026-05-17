@@ -7,8 +7,9 @@ use App\Core\Cslabs;
 header('Content-Type: application/json');
 
 $document = trim((string) ($_GET['DocumentNumber'] ?? $_GET['documentNumber'] ?? ''));
+$account = trim((string) ($_GET['Account'] ?? $_GET['account'] ?? ''));
 
-$response = Cslabs::accountFetchBusinessResponse($document);
+$response = Cslabs::accountFetchBusinessResponse($document, $account);
 
 if (($response['status'] ?? null) === 'ERROR') {
     http_response_code(422);

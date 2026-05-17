@@ -76,16 +76,16 @@ Cslabs::writeEntity('spb_transfers', $id, [
 Cslabs::writeEntity('spb_transfers_by_client_code', $clientCode, ['id' => $id]);
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('spb-transfer-out');
-Cslabs::scheduleWebhook('spb-transfer-out', [
-    'entity' => 'spb-transfer-out',
-    'status' => 'CONFIRMED',
-    'body' => array_merge($response['body'], [
-        'originalId' => $id,
+Cslabs::scheduleWebhook(
+    'spb-transfer-out',
+    Cslabs::webhookEnvelope('spb-transfer-out', 'CONFIRMED', array_merge($response['body'], [
         'description' => (string) ($body['description'] ?? ''),
         'clientFinality' => (string) ($body['clientFinality'] ?? '10'),
         'numCtrlStr' => 'STR' . date('Ymd') . str_pad((string) random_int(100000000, 999999999), 9, '0', STR_PAD_LEFT),
-    ]),
-], 3, $webhookUrl);
+    ])),
+    3,
+    $webhookUrl
+);
 
 http_response_code(201);
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

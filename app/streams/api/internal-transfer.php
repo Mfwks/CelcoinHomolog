@@ -71,18 +71,19 @@ $response = [
     'message' => 'Transferência interna recebida com sucesso.',
 ];
 
-$webhookPayload = [
-    'event' => 'wallet.internal.transfer.completed',
-    'transactionId' => $transactionId,
-    'clientRequestId' => $clientRequestId,
-    'status' => 'COMPLETED',
+$webhookBody = [
+    'id' => $transactionId,
     'amount' => round($amount, 2),
-    'description' => $transfer['description'],
-    'debitParty' => $transfer['debitParty'],
+    'clientRequestId' => $clientRequestId,
     'creditParty' => $transfer['creditParty'],
-    'processedAt' => date(DATE_ATOM, time() + 2),
+    'debitParty' => $transfer['debitParty'],
+    'endToEndId' => gerarHashMock(),
+    'description' => $transfer['description'],
+    'oldBalance' => null,
+    'currentBalance' => null,
 ];
 
+$webhookPayload = Cslabs::webhookEnvelope('internal-transfer-out', 'CONFIRMED', $webhookBody);
 $webhookUrl = Cslabs::webhookSubscriptionUrl('internal-transfer-out');
 
 Cslabs::writeEntity('internal_transfers', $clientRequestId, [
@@ -93,7 +94,7 @@ Cslabs::writeEntity('internal_transfers', $clientRequestId, [
     'webhook_url' => $webhookUrl,
 ]);
 
-Cslabs::scheduleWebhook('wallet.internal.transfer.completed', $webhookPayload, 2, $webhookUrl);
+Cslabs::scheduleWebhook('internal-transfer-out', $webhookPayload, 2, $webhookUrl);
 
 http_response_code(201);
 echo json_encode($response, JSON_PRETTY_PRINT);

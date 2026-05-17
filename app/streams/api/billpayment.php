@@ -58,15 +58,35 @@ if ($transactionIdAuthorize !== null) {
 }
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('billpayment');
-$webhookPayload = [
-    'entity' => 'billpayment',
-    'status' => 'CONFIRMED',
-    'body' => [
-        'clientRequestId' => $clientRequestId,
-        'amount' => $amount,
-        'id' => $id,
+$webhookPayload = Cslabs::webhookEnvelope('billpayment', 'CONFIRMED', [
+    'account' => $account,
+    'amount' => $amount,
+    'barCodeInfo' => [
+        'type' => 1,
+        'digitable' => $digitable,
+        'barCode' => null,
     ],
-];
+    'clientRequestId' => $clientRequestId,
+    'id' => $id,
+    'tags' => [],
+    'transactionIdAuthorize' => $transactionIdAuthorize,
+    'authentication' => random_int(1000, 9999),
+    'authenticationAPI' => [
+        'bloco1' => strtoupper(substr(hash('sha1', $id . '1'), 0, 16)),
+        'bloco2' => strtoupper(substr(hash('sha1', $id . '2'), 0, 16)),
+        'blocoCompleto' => strtoupper(substr(hash('sha1', $id . '1'), 0, 16) . substr(hash('sha1', $id . '2'), 0, 16)),
+    ],
+    'convenant' => 'CIP CELCOIN',
+    'createDate' => $state['created_at'],
+    'isExpired' => false,
+    'receipt' => [
+        'receiptData' => '',
+        'receiptformatted' => '',
+    ],
+    'settleDate' => date('Y-m-d\T00:00:00'),
+    'status' => 'CONFIRMED',
+    'transactionId' => $transactionIdAuthorize,
+]);
 
 Cslabs::scheduleWebhook('billpayment', $webhookPayload, 3, $webhookUrl);
 

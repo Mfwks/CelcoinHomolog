@@ -532,6 +532,7 @@ class Cslabs
         }
 
         $endToEndId = trim((string) ($payload['endToEndId'] ?? '')) ?: ('E13935893' . date('YmdHi') . substr(hash('sha256', $id), 0, 11));
+        $returnIdentification = 'D13935893' . date('Ymd') . substr(hash('sha256', $id . '-ret'), 0, 11);
 
         return [
             'status' => 'PROCESSING',
@@ -540,10 +541,12 @@ class Cslabs
                 'id' => gerarHashMock(),
                 'clientCode' => $clientCode !== '' ? $clientCode : ('REV-' . substr($id, 0, 8)),
                 'amount' => round($amount, 2),
-                'originalId' => $id,
+                'originalPaymentId' => $id,
                 'endToEndId' => $endToEndId,
-                'reason' => (string) ($payload['reason'] ?? 'SOLICITADO_PELO_USUARIO'),
+                'returnIdentification' => $returnIdentification,
+                'reason' => (string) ($payload['reason'] ?? 'MD06'),
                 'reversalDescription' => (string) ($payload['reversalDescription'] ?? ''),
+                'additionalInformation' => (string) ($payload['additionalInformation'] ?? ''),
             ],
         ];
     }
@@ -570,7 +573,7 @@ class Cslabs
         }
 
         return [
-            'status' => 'SUCCESS',
+            'status' => 'CONFIRMED',
             'version' => '1.0.0',
             'body' => [
                 'id' => gerarHashMock(),
@@ -645,17 +648,12 @@ class Cslabs
         }
 
         $claimId = trim((string) ($payload['id'] ?? $payload['claimId'] ?? '')) ?: gerarHashMock();
+        $body = self::buildPixDictClaimBody($claimId, $key, $statusByKind[$kind], $payload);
 
         return [
             'status' => 'SUCCESS',
             'version' => '1.0.0',
-            'body' => [
-                'id' => $claimId,
-                'key' => $key,
-                'status' => $statusByKind[$kind],
-                'claimType' => (string) ($payload['claimType'] ?? 'PORTABILITY'),
-                'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
-            ],
+            'body' => $body,
         ];
     }
 
@@ -672,12 +670,48 @@ class Cslabs
         return [
             'status' => 'SUCCESS',
             'version' => '1.0.0',
-            'body' => [
-                'id' => $id,
-                'status' => 'OPEN',
-                'claimType' => 'PORTABILITY',
-                'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+            'body' => self::buildPixDictClaimBody($id, '', 'OPEN', []),
+        ];
+    }
+
+    private static function buildPixDictClaimBody(string $claimId, string $key, string $status, array $payload): array
+    {
+        // keyType: request usa UPPER (CPF/CNPJ/EMAIL/PHONE); response usa Pascal
+        // (CPF/CNPJ/Email/Phone). Inconsistência preservada conforme doc oficial.
+        $keyTypeRequest = strtoupper(trim((string) ($payload['keyType'] ?? '')));
+        $pascalMap = ['CPF' => 'CPF', 'CNPJ' => 'CNPJ', 'EMAIL' => 'Email', 'PHONE' => 'Phone'];
+        $detected = strtoupper(self::pixKeyType($key !== '' ? $key : 'fallback@pix.com'));
+        $keyTypePascal = $pascalMap[$keyTypeRequest] ?? $pascalMap[$detected] ?? 'CPF';
+
+        $accountInput = (string) ($payload['account'] ?? '');
+        $accountDigits = preg_replace('/\D+/', '', $accountInput) ?: '';
+        $claimerTaxId = $key !== '' ? self::pixKeyOwnerDocument($key) : '06170097914';
+
+        $now = gmdate('Y-m-d\TH:i:s.000\Z');
+        $periodEnd = gmdate('Y-m-d\TH:i:s.000\Z', time() + (7 * 86400));
+
+        return [
+            'id' => $claimId,
+            'claimType' => strtoupper((string) ($payload['claimType'] ?? 'PORTABILITY')),
+            'key' => $key,
+            'keyType' => $keyTypePascal,
+            'claimerAccount' => [
+                'participant' => '13935893',
+                'branch' => '0001',
+                'account' => $accountDigits !== '' ? $accountDigits : self::accountNumberFromSeed(hash('sha256', $key . $claimId)),
+                'accountType' => 'TRAN',
             ],
+            'claimer' => [
+                'personType' => strlen($claimerTaxId) === 14 ? 'LEGAL_PERSON' : 'NATURAL_PERSON',
+                'taxId' => $claimerTaxId,
+                'name' => (string) ($payload['claimerName'] ?? 'HOMOLOGACAO'),
+            ],
+            'donorParticipant' => (string) ($payload['donorParticipant'] ?? '60746948'),
+            'createTimestamp' => $now,
+            'completionPeriodEnd' => $periodEnd,
+            'resolutionPeriodEnd' => $periodEnd,
+            'lastModified' => $now,
+            'status' => $status,
         ];
     }
 
@@ -690,7 +724,7 @@ class Cslabs
                 'totalElements' => 0,
                 'claims' => [],
                 'page' => (int) ($query['Page'] ?? 1),
-                'limitPerPage' => (int) ($query['LimitPerPage'] ?? 20),
+                'limitPerPage' => (int) ($query['LimitPerPage'] ?? 10),
             ],
         ];
     }
@@ -738,7 +772,11 @@ class Cslabs
         $transactionId = gerarHashMock();
         $pactualId = gerarHashMock();
         $locationId = substr(hash('sha256', $clientRequestId), 0, 24);
-        $amount = round((float) ($payload['amount'] ?? 0), 2);
+        // Doc oficial: amount no QR dinâmico é string (default "5000.00"), diferente do estático (double).
+        $amountInput = $payload['amount'] ?? null;
+        $amountStr = ($amountInput === null || $amountInput === '')
+            ? '5000.00'
+            : number_format((float) $amountInput, 2, '.', '');
         $expiration = (int) ($payload['expiration'] ?? 86400);
 
         return [
@@ -751,9 +789,9 @@ class Cslabs
                 'body' => [
                     'location' => 'qrcode.pix.celcoin.com.br/pixqrcode/v2/cobv/' . $locationId,
                     'calendar' => ['expiration' => $expiration],
-                    'amount' => ['original' => $amount],
+                    'amount' => ['original' => $amountStr],
                     'dynamicBRCodeData' => [
-                        'emvqrcps' => self::buildEmv($key, number_format($amount, 2, '.', ''), $clientRequestId),
+                        'emvqrcps' => self::buildEmv($key, $amountStr, $clientRequestId),
                         'merchantAccountInformation' => [
                             'url' => 'qrcode.pix.celcoin.com.br/pixqrcode/v2/cobv/' . $locationId,
                         ],
@@ -813,28 +851,54 @@ class Cslabs
         ];
     }
 
-    public static function accountFetchBusinessResponse(string $document): array
+    public static function accountFetchBusinessResponse(string $document, string $account = ''): array
     {
-        if (trim($document) === '') {
-            return self::accountManagerError('CBE014', 'DocumentNumber é obrigatório.');
+        $document = trim($document);
+        $account = trim($account);
+
+        if ($document === '' && $account === '') {
+            return self::accountManagerError('CBE014', 'DocumentNumber ou Account é obrigatório.');
         }
 
         $digits = preg_replace('/\D+/', '', $document) ?? '';
-        $seed = hash('sha256', $digits);
+        $seed = hash('sha256', $digits !== '' ? $digits : $account);
+        $accountNumber = $account !== '' ? $account : self::accountNumberFromSeed($seed);
 
         return [
             'status' => 'SUCCESS',
             'version' => '1.0.0',
             'body' => [
-                'documentNumber' => $digits,
+                'documentNumber' => $digits !== '' ? $digits : '00000000000000',
                 'businessName' => 'EMPRESA HOMOLOGACAO LTDA',
                 'tradingName' => 'HOMOLOG',
                 'businessEmail' => 'contato@homolog.example',
                 'contactNumber' => '+5511999999999',
-                'account' => self::accountNumberFromSeed($seed),
+                'account' => $accountNumber,
                 'branch' => '0001',
                 'status' => 'ATIVO',
                 'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+                'businessAddress' => [
+                    'postalCode' => '01310100',
+                    'street' => 'Av. Paulista',
+                    'number' => '1000',
+                    'addressComplement' => '',
+                    'neighborhood' => 'Bela Vista',
+                    'city' => 'São Paulo',
+                    'state' => 'SP',
+                    'addressType' => 'COMMERCIAL',
+                ],
+                'owner' => [
+                    [
+                        'documentNumber' => '06170097914',
+                        'fullName' => 'SOCIO HOMOLOGACAO',
+                        'socialName' => null,
+                        'motherName' => 'MAE HOMOLOGACAO',
+                        'birthDate' => '1980-01-01',
+                        'email' => 'socio@homolog.example',
+                        'phoneNumber' => '+5511988888888',
+                        'isPoliticallyExposedPerson' => false,
+                    ],
+                ],
             ],
         ];
     }
@@ -1499,12 +1563,20 @@ class Cslabs
     {
         $id = gerarHashMock();
         $now = gmdate('Y-m-d\TH:i:s\Z');
+        $endToEnd = 'E13935893' . date('YmdHi') . substr($id, 0, 11);
 
         return match ($entity) {
             'onboarding-create' => [
+                'account' => [
+                    'branch' => '0001',
+                    'account' => substr(hash('sha256', $id), 0, 9),
+                    'name' => 'EMPRESA HOMOLOG',
+                    'documentNumber' => '49966300000119',
+                    'ispb' => '13935893',
+                ],
                 'onboardingId' => $id,
                 'clientCode' => 'CLI-' . substr($id, 0, 8),
-                'account' => ['account' => substr(hash('sha256', $id), 0, 9), 'branch' => '0001'],
+                'createDate' => $now,
             ],
             'onboarding-backgroundcheck', 'onboarding-documentscopy', 'onboarding-proposal' => [
                 'proposalId' => $id,
@@ -1515,54 +1587,153 @@ class Cslabs
             'kyc' => [
                 'onboardingId' => $id,
             ],
-            'pix-payment-in', 'pix-payment-out' => [
+            'pix-payment-in' => [
                 'id' => $id,
                 'amount' => 25.00,
-                'endToEndId' => 'E13935893' . date('YmdHi') . substr($id, 0, 11),
-                'creditParty' => ['account' => '443168490', 'key' => 'demo@pix.com', 'taxId' => '06170097914', 'name' => 'Daniel Eskelsen', 'branch' => '0001', 'bank' => '13935893', 'accountType' => 'CACC'],
-                'debitParty' => ['account' => '443168489', 'taxId' => '12345678000195', 'name' => 'EMPRESA HOMOLOG', 'branch' => '0001', 'bank' => '13935893', 'accountType' => 'CACC'],
+                'endToEndId' => $endToEnd,
+                'initiationType' => 'MANUAL',
+                'paymentType' => 'IMMEDIATE',
+                'urgency' => 'HIGH',
+                'transactionType' => 'RECEIVEPIX',
+                'debitParty' => ['bank' => '10573521', 'account' => '96514838590', 'branch' => '0001', 'taxId' => '40996994807', 'name' => 'Rafael Adabo Gastaldi', 'accountType' => 'CACC'],
+                'creditParty' => ['bank' => '13935893', 'key' => '', 'account' => '3005415542261', 'branch' => '0001', 'taxId' => '36000285000108', 'name' => 'EMPRESA HOMOLOG', 'accountType' => 'TRAN'],
+                'remittanceInformation' => null,
+                'currentBalance' => 12003.03,
+                'oldBalance' => 11978.03,
+                'transactionIdBRCode' => null,
+            ],
+            'pix-payment-out' => [
+                'id' => $id,
+                'amount' => 140.00,
+                'clientCode' => 'CLI-' . substr($id, 0, 7),
+                'reason' => null,
+                'transactionIdentification' => substr($id, 0, 10),
+                'endToEndId' => $endToEnd,
+                'initiationType' => 'STATIC_QRCODE',
+                'paymentType' => 'IMMEDIATE',
+                'urgency' => 'HIGH',
+                'transactionType' => 'TRANSFER',
+                'debitParty' => ['account' => '447959768', 'branch' => '0001', 'taxId' => '62519201000157', 'name' => 'EMPRESA HOMOLOG', 'accountType' => 'TRAN'],
+                'creditParty' => ['bank' => '18236120', 'key' => '23839794811', 'account' => '260265413', 'branch' => '0001', 'taxId' => '23839794811', 'name' => 'Linli Jin', 'accountType' => 'TRAN'],
+                'remittanceInformation' => '',
+                'currentBalance' => 19814.54,
+                'oldBalance' => 19954.54,
+                'dataInsercao' => $now,
             ],
             'internal-transfer-out', 'internal-transfer-in' => [
-                'amount' => 4.5,
-                'description' => 'Transferencia interna',
-                'creditParty' => ['account' => '443168490'],
-                'debitParty' => ['account' => '443168489'],
-            ],
-            'spb-transfer-out', 'spb-transfer-in' => [
                 'id' => $id,
-                'originalId' => $id,
-                'amount' => 100.0,
+                'amount' => 6.90,
+                'clientRequestId' => $id,
+                'creditParty' => ['account' => '300541554121', 'taxId' => '49966300000119', 'name' => 'EMPRESA HOMOLOG', 'branch' => '0001', 'bank' => '13935893'],
+                'debitParty' => ['account' => '447959768', 'taxId' => '62519201000157', 'name' => 'EMPRESA DEBITO', 'branch' => '0001', 'bank' => '13935893'],
+                'endToEndId' => $endToEnd,
+                'description' => 'Transferencia interna',
+                'oldBalance' => 19814.54,
+                'currentBalance' => 19807.64,
+            ],
+            'spb-transfer-out' => [
+                'id' => $id,
+                'amount' => 34392.22,
                 'clientCode' => 'T-' . substr($id, 0, 8),
-                'creditParty' => ['account' => '12345-6', 'branch' => '0001', 'bank' => '60701190', 'taxId' => '06170097914', 'name' => 'Daniel Eskelsen', 'accountType' => 'CC'],
-                'debitParty' => ['account' => '300541554121', 'branch' => '0001', 'bank' => '13935893', 'taxId' => '49966300000119', 'name' => 'TOTALIS', 'accountType' => 'PG'],
+                'description' => 'Repasse',
+                'clientFinality' => '10',
+                'numCtrlStr' => 'STR' . date('Ymd') . str_pad((string) random_int(100000000, 999999999), 9, '0', STR_PAD_LEFT),
+                'debitParty' => ['name' => 'EMPRESA HOMOLOG', 'personType' => 'J', 'accountType' => 'PG', 'bank' => '13935893', 'account' => '3005415541891', 'branch' => '0001', 'taxId' => '14718532000173'],
+                'creditParty' => ['name' => 'STL ELETRONICA E TI', 'personType' => 'J', 'accountType' => 'CC', 'bank' => '60701190', 'account' => '168895', 'branch' => '0375', 'taxId' => '35288962000172'],
+                'currentBalance' => 22156.65,
+                'oldBalance' => 56548.87,
+            ],
+            'spb-transfer-in' => [
+                'id' => $id,
+                'amount' => 270000.00,
+                'debitParty' => ['account' => '8001', 'branch' => '3235', 'taxId' => '52885021000135', 'accountType' => 'CC', 'name' => 'CINQ CAPITAL', 'bank' => '00000000', 'personType' => 'J'],
+                'creditParty' => ['account' => '300541554121', 'branch' => '1', 'taxId' => '49966300000119', 'accountType' => 'CC', 'name' => 'EMPRESA HOMOLOG', 'bank' => '13935893', 'personType' => 'J'],
+                'reason' => 'PAGAMENTOS DIVERSOS',
+                'clientfinality' => '99999',
+                'typeCode' => 'STR0008R2',
+                'numCtrlSTR' => 'STR' . date('Ymd') . str_pad((string) random_int(100000000, 999999999), 9, '0', STR_PAD_LEFT),
+                'currentBalance' => 464354.24,
+                'oldBalance' => 194354.24,
             ],
             'spb-reversal-in', 'spb-reversal-out' => [
                 'id' => $id,
-                'originalId' => $id,
-                'amount' => 50.0,
-                'creditParty' => ['account' => '12345-6'],
-                'debitParty' => ['account' => '300541554121'],
+                'amount' => 500.00,
+                'debitParty' => ['account' => '108552263', 'branch' => '0001', 'taxId' => '33630661000150', 'accountType' => 'CC', 'name' => 'Latam Gateway', 'bank' => '71027866', 'personType' => 'J'],
+                'creditParty' => ['account' => '3005415542618', 'branch' => '0001', 'taxId' => '89714601800', 'accountType' => 'PG', 'name' => 'EMPRESA HOMOLOG', 'bank' => '13935893', 'personType' => 'F'],
+                'originalId' => gerarHashMock(),
+                'reason' => 'SPB Cashin Notification',
+                'originalClientCode' => 'T-' . substr($id, 0, 8),
+                'numCtrlSTR' => null,
+                'currentBalance' => null,
+                'oldBalance' => null,
             ],
-            'charge-create' => [
-                'transactionId' => $id,
+            'charge-create', 'charge-in' => $status === 'ERROR' ? [
+                'error' => ['message' => 'Falha em geração de boleto, favor tente novamente.'],
                 'externalId' => '0000000001',
-                'boleto' => [
-                    'bankLine' => self::boletoBankLine($id, 50.0, date('Y-m-d')),
-                    'bankAccount' => '443168489',
-                    'bankAgency' => '0001',
-                    'status' => 'PENDING',
-                ],
-            ],
-            'charge-in', 'charge-canceled' => [
+                'status' => 'ERROR',
                 'transactionId' => $id,
-                'status' => $entity === 'charge-in' ? 'Pago' : 'Cancelado',
-                'valorPago' => 50.0,
+            ] : [
+                'amount' => 2256.27,
+                'boleto' => [
+                    'transactionId' => (string) random_int(100000, 999999),
+                    'status' => $status === 'CONFIRMED' ? 'PAID' : 'PENDING',
+                    'bankLine' => self::boletoBankLine($id, 2256.27, date('Y-m-d')),
+                    'bankNumber' => substr($id, 0, 9),
+                    'barCode' => '34197978000002256271098014789950910156496000',
+                    'bankEmissor' => 'itauAgreement',
+                    'bankAgency' => '0910',
+                    'bankAccount' => '15649',
+                    'bankAssignor' => 'CELCOIN INSTITUIÇÃO DE PAGAMENTO - SA',
+                ],
+                'debtor' => ['city' => 'São Paulo', 'complement' => 'Sem complemento', 'document' => '49438599000139', 'name' => 'ATELIE DR COSTURA', 'neighborhood' => 'Brás', 'number' => '2071', 'postalCode' => '03001000', 'state' => 'SP', 'publicArea' => 'Avenida Rangel Pestana'],
+                'duedate' => date('Y-m-d 00:00:00'),
+                'expirationAfterPayment' => 1,
+                'pix' => [
+                    'transactionId' => (string) random_int(1000000000, 9999999999),
+                    'transactionIdentification' => substr(str_replace('-', '', $id), 0, 30),
+                    'status' => $status === 'CONFIRMED' ? 'PAID' : 'PENDING',
+                    'locationId' => (string) random_int(100000000, 999999999),
+                    'key' => $id,
+                    'emv' => '00020101021226960014br.gov.bcb.pix2574qrcode.pix.celcoin.com.br/pixqrcode/v2/cobv/' . substr(str_replace('-', '', $id), 0, 28) . '5204000053039865802BR5911EMPRESAHOM6009Sao Paulo62070503***6304ABCD',
+                ],
+                'receiver' => ['city' => 'São Paulo', 'document' => '49966300000119', 'name' => 'EMPRESA HOMOLOG', 'postalCode' => '04570001', 'publicArea' => 'Avenida Nova Independência', 'state' => 'SP', 'account' => '300541554121'],
+                'externalId' => '0000000001',
+                'status' => $status,
+                'transactionId' => $id,
+            ],
+            'charge-canceled' => [
+                'transactionId' => $id,
+                'status' => 'CANCELLED',
+                'reason' => 'Cancelado pelo emissor',
             ],
             'billpayment', 'billpayment-occurrence' => [
-                'clientRequestId' => substr($id, 0, 12),
-                'amount' => 1763.66,
+                'account' => '414998567',
+                'amount' => 138.56,
+                'barCodeInfo' => [
+                    'type' => 1,
+                    'digitable' => '826100000015385600970912091815316855195952462834',
+                    'barCode' => null,
+                ],
+                'clientRequestId' => substr($id, 0, 8),
                 'id' => $id,
-                'idOriginal' => $id,
+                'tags' => [],
+                'transactionIdAuthorize' => random_int(4000000000, 4999999999),
+                'authentication' => random_int(1000, 9999),
+                'authenticationAPI' => [
+                    'bloco1' => 'C7.56.2F.D7.C0.38.44.D5',
+                    'bloco2' => '05.02.85.96.F3.94.70.46',
+                    'blocoCompleto' => 'C7.56.2F.D7.C0.38.44.D5.05.02.85.96.F3.94.70.46',
+                ],
+                'convenant' => 'CIP CELCOIN',
+                'createDate' => $now,
+                'isExpired' => false,
+                'receipt' => [
+                    'receiptData' => '',
+                    'receiptformatted' => "    EMPRESA HOMOLOG\r\n          PROTOCOLO " . random_int(4000000000, 4999999999) . "\r\n",
+                ],
+                'settleDate' => date('Y-m-d\T00:00:00'),
+                'status' => $status,
+                'transactionId' => random_int(4000000000, 4999999999),
             ],
             'account-status' => [
                 'account' => '443168489',
@@ -1571,6 +1742,31 @@ class Cslabs
             ],
             default => ['id' => $id, 'timestamp' => $now],
         };
+    }
+
+    public static function webhookEnvelope(string $entity, string $status, array $body): array
+    {
+        $stampKey = self::webhookTimestampKey($entity);
+        $timestamp = gmdate('Y-m-d\TH:i:s.u');
+        $webhookId = (string) ($body['id'] ?? ($body['onboardingId'] ?? ($body['transactionId'] ?? gerarHashMock())));
+
+        return [
+            'entity' => $entity,
+            $stampKey => $timestamp,
+            'status' => $status,
+            'body' => $body,
+            'webhookId' => $webhookId,
+        ];
+    }
+
+    private static function webhookTimestampKey(string $entity): string
+    {
+        $sMaiusculo = [
+            'pix-payment-in', 'pix-payment-out',
+            'spb-transfer-in', 'spb-reversal-in', 'spb-reversal-out',
+        ];
+
+        return in_array($entity, $sMaiusculo, true) ? 'createTimeStamp' : 'createTimestamp';
     }
 
     public static function deleteWebhookSubscription(string $entity): bool

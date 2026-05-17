@@ -25,13 +25,15 @@ if (($response['status'] ?? null) === 'ERROR') {
     http_response_code(422);
 }
 
-if (($response['status'] ?? null) === 'SUCCESS') {
+if (($response['status'] ?? null) === 'CONFIRMED') {
     Cslabs::writeEntity('wallet_entries', $response['body']['id'], $response['body']);
-    Cslabs::scheduleWebhook('launch-' . strtolower($response['body']['type']), [
-        'entity' => 'launch-' . strtolower($response['body']['type']),
-        'status' => 'CONFIRMED',
-        'body' => $response['body'],
-    ], 2, Cslabs::webhookSubscriptionUrl('launch-' . strtolower($response['body']['type'])));
+    $entity = 'launch-' . strtolower($response['body']['type']);
+    Cslabs::scheduleWebhook(
+        $entity,
+        Cslabs::webhookEnvelope($entity, 'CONFIRMED', $response['body']),
+        2,
+        Cslabs::webhookSubscriptionUrl($entity)
+    );
 }
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
