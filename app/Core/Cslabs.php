@@ -2397,4 +2397,356 @@ class Cslabs
         $value = preg_replace('/[^a-zA-Z0-9._-]/', '_', $value) ?: 'item';
         return trim($value, '._-') ?: 'item';
     }
+
+    public static function onboardingProposalCreateResponse(array $payload, string $kind): array
+    {
+        $scenario = self::scenarioFromPayload($payload, [
+            'scenario', 'mockScenario', 'mock_scenario',
+            'fullName', 'businessName', 'documentNumber',
+        ]);
+
+        $missing = $kind === 'legal-person'
+            ? self::missingProposalLegalFields($payload)
+            : self::missingProposalNaturalFields($payload);
+
+        if ($missing !== null) {
+            return self::onboardingValidationError($missing);
+        }
+
+        if ($scenario !== 'success') {
+            return self::onboardingError($scenario);
+        }
+
+        $proposalId = gerarHashMock();
+        $clientCode = (string) ($payload['clientCode'] ?? '');
+        $documentNumber = preg_replace('/\D+/', '', (string) ($payload['documentNumber'] ?? '')) ?: '';
+
+        return [
+            'version' => '1.0.0',
+            'status' => 'PROCESSING',
+            'body' => [
+                'proposalId' => $proposalId,
+                'clientCode' => $clientCode,
+                'documentNumber' => $documentNumber,
+                'proposalStatus' => 'CREATED',
+                'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+            ],
+        ];
+    }
+
+    public static function onboardingProposalListResponse(array $query): array
+    {
+        $page = max(1, (int) ($query['Page'] ?? 1));
+        $limit = max(1, min(200, (int) ($query['LimitPerPage'] ?? $query['Limit'] ?? 200)));
+
+        $filters = [
+            'ProposalId' => trim((string) ($query['ProposalId'] ?? '')),
+            'ClientCode' => trim((string) ($query['ClientCode'] ?? '')),
+            'DocumentNumber' => trim((string) ($query['DocumentNumber'] ?? '')),
+            'Status' => strtoupper(trim((string) ($query['Status'] ?? ''))),
+        ];
+
+        $all = [];
+        foreach (self::listEntities('onboarding_proposals') as $row) {
+            if ($filters['ProposalId'] !== '' && ($row['proposalId'] ?? '') !== $filters['ProposalId']) {
+                continue;
+            }
+            if ($filters['ClientCode'] !== '' && ($row['clientCode'] ?? '') !== $filters['ClientCode']) {
+                continue;
+            }
+            if ($filters['DocumentNumber'] !== '' && ($row['documentNumber'] ?? '') !== $filters['DocumentNumber']) {
+                continue;
+            }
+            if ($filters['Status'] !== '' && strtoupper((string) ($row['proposalStatus'] ?? '')) !== $filters['Status']) {
+                continue;
+            }
+            $all[] = $row;
+        }
+
+        $total = count($all);
+        $offset = ($page - 1) * $limit;
+        $slice = array_slice($all, $offset, $limit);
+
+        return [
+            'version' => '1.0.0',
+            'status' => 'SUCCESS',
+            'body' => [
+                'proposals' => $slice,
+                'totalItems' => $total,
+                'currentPage' => $page,
+                'totalPages' => $total === 0 ? 0 : (int) ceil($total / $limit),
+                'limitPerPage' => $limit,
+            ],
+        ];
+    }
+
+    public static function walletMovementResponse(array $query): array
+    {
+        $account = trim((string) ($query['Account'] ?? ''));
+        $document = preg_replace('/\D+/', '', (string) ($query['DocumentNumber'] ?? '')) ?: '';
+        $dateFrom = trim((string) ($query['DateFrom'] ?? ''));
+        $dateTo = trim((string) ($query['DateTo'] ?? ''));
+        $order = strtolower(trim((string) ($query['Order'] ?? 'asc')));
+        $page = max(1, (int) ($query['Page'] ?? 1));
+        $limit = max(1, (int) ($query['LimitPerPage'] ?? 100));
+
+        if ($dateFrom === '' || $dateTo === '') {
+            return [
+                'version' => '1.0.0',
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'DateFrom e DateTo são obrigatórios (yyyy-MM-dd).'],
+            ];
+        }
+
+        $seed = hash('sha256', $account . '|' . $document . '|' . $dateFrom);
+        $count = (hexdec(substr($seed, 0, 2)) % 4) + 2; // 2..5 movimentações
+        $movements = [];
+        $baseTs = strtotime($dateFrom . ' 09:00:00') ?: time();
+
+        for ($i = 0; $i < $count; $i++) {
+            $chunk = substr($seed, $i * 4, 8);
+            $isCredit = (hexdec(substr($chunk, 0, 2)) % 2) === 0;
+            $amount = round((hexdec(substr($chunk, 2, 4)) % 50000) / 100 + 10, 2);
+            $movements[] = [
+                'id' => gerarHashMock(),
+                'amount' => $amount,
+                'movementType' => $isCredit ? 'CREDIT' : 'DEBIT',
+                'movementCode' => $isCredit ? 'PIX_IN' : 'PIX_OUT',
+                'description' => $isCredit ? 'Pix recebido' : 'Pix enviado',
+                'transactionIdentification' => 'E13935893' . date('YmdHi', $baseTs + ($i * 600)) . substr($chunk, 0, 11),
+                'clientCode' => '',
+                'createDate' => gmdate('Y-m-d\TH:i:s\Z', $baseTs + ($i * 600)),
+                'balanceAfter' => round(3000000.00 + ($isCredit ? $amount : -$amount), 2),
+                'counterParty' => [
+                    'name' => $isCredit ? 'JOAO PAGADOR' : 'MARIA RECEBEDORA',
+                    'documentNumber' => $isCredit ? '11122233344' : '55566677788',
+                    'bank' => $isCredit ? '341' : '237',
+                    'branch' => '0001',
+                    'account' => '12345-6',
+                ],
+            ];
+        }
+
+        $movements = $order === 'desc' ? array_reverse($movements) : $movements;
+        $total = count($movements);
+
+        return [
+            'version' => '1.0.0',
+            'status' => 'SUCCESS',
+            'body' => [
+                'account' => $account !== '' ? $account : self::accountNumberFromSeed($seed),
+                'documentNumber' => $document,
+                'dateFrom' => $dateFrom,
+                'dateTo' => $dateTo,
+                'movements' => array_slice($movements, ($page - 1) * $limit, $limit),
+                'totalItems' => $total,
+                'currentPage' => $page,
+                'totalPages' => (int) ceil($total / $limit),
+                'order' => $order,
+            ],
+        ];
+    }
+
+    public static function consolidatedStatementResponse(array $query): array
+    {
+        $startDate = trim((string) ($query['startDate'] ?? ''));
+        $endDate = trim((string) ($query['endDate'] ?? ''));
+        $page = max(1, (int) ($query['page'] ?? 1));
+        $quantity = max(1, (int) ($query['quantity'] ?? 1000));
+
+        if ($startDate === '' || $endDate === '') {
+            return [
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'AttributeValidation', 'message' => 'startDate e endDate são obrigatórios.'],
+            ];
+        }
+
+        $startTs = strtotime($startDate);
+        $endTs = strtotime($endDate);
+        if ($startTs === false || $endTs === false || $endTs < $startTs) {
+            return [
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'DateValidation', 'message' => 'Período inválido (máx 15 dias).'],
+            ];
+        }
+        if (($endTs - $startTs) > (15 * 86400)) {
+            return [
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'DateValidation', 'message' => 'Janela máxima é de 15 dias.'],
+            ];
+        }
+
+        $data = [];
+        $saldo = 3000000.00;
+        $nsa = 1;
+        $tipos = [
+            ['nomeHistorico' => 'PIX RECEBIDO',  'credito' => 1500.00, 'debito' => 0.00,    'historicoId' => 101],
+            ['nomeHistorico' => 'PIX ENVIADO',   'credito' => 0.00,    'debito' => 850.00,  'historicoId' => 102],
+            ['nomeHistorico' => 'TARIFA TED',    'credito' => 0.00,    'debito' => 8.50,    'historicoId' => 201],
+            ['nomeHistorico' => 'BOLETO PAGO',   'credito' => 0.00,    'debito' => 320.00,  'historicoId' => 301],
+            ['nomeHistorico' => 'TED RECEBIDA',  'credito' => 5000.00, 'debito' => 0.00,    'historicoId' => 104],
+        ];
+
+        for ($ts = $startTs; $ts <= $endTs; $ts += 86400) {
+            $diaCredito = 0.00;
+            $diaDebito = 0.00;
+            $diaOps = 0;
+            $linhasDia = [];
+            $seed = hash('sha256', date('Y-m-d', $ts));
+            $linhas = (hexdec(substr($seed, 0, 2)) % 3) + 1;
+            for ($i = 0; $i < $linhas; $i++) {
+                $tipo = $tipos[hexdec(substr($seed, $i * 2, 2)) % count($tipos)];
+                $linhasDia[] = $tipo;
+                $diaCredito += $tipo['credito'];
+                $diaDebito += $tipo['debito'];
+                $diaOps += 1 + (hexdec(substr($seed, ($i * 2) + 4, 2)) % 3);
+            }
+            $saldo = round($saldo + $diaCredito - $diaDebito, 2);
+            foreach ($linhasDia as $linha) {
+                $data[] = [
+                    'data' => date('Y-m-d', $ts),
+                    'dataContabil' => date('Y-m-d', $ts),
+                    'nomeHistorico' => $linha['nomeHistorico'],
+                    'qtdOperacoes' => 1,
+                    'debito' => round($linha['debito'], 2),
+                    'credito' => round($linha['credito'], 2),
+                    'saldoDia' => round($diaCredito - $diaDebito, 2),
+                    'saldo' => $saldo,
+                    'historicoId' => $linha['historicoId'],
+                    'nsa' => $nsa++,
+                ];
+            }
+        }
+
+        $total = count($data);
+        $offset = ($page - 1) * $quantity;
+
+        return [
+            'status' => 'SUCCESS',
+            'body' => [
+                'records' => array_slice($data, $offset, $quantity),
+                'totalRecords' => $total,
+                'page' => $page,
+                'quantity' => $quantity,
+                'startDate' => $startDate,
+                'endDate' => $endDate,
+            ],
+        ];
+    }
+
+    public static function exportFileTypesResponse(): array
+    {
+        return [
+            'status' => 'SUCCESS',
+            'body' => [
+                'types' => [
+                    ['filetype' => 1,  'description' => 'Movimentação'],
+                    ['filetype' => 2,  'description' => 'Recusas'],
+                    ['filetype' => 3,  'description' => 'Transferências'],
+                    ['filetype' => 4,  'description' => 'Pix enviados'],
+                    ['filetype' => 5,  'description' => 'Pix recebidos'],
+                    ['filetype' => 6,  'description' => 'Pix devoluções'],
+                    ['filetype' => 7,  'description' => 'Boletos pagos'],
+                    ['filetype' => 8,  'description' => 'Boletos emitidos'],
+                    ['filetype' => 9,  'description' => 'Débito veicular'],
+                    ['filetype' => 10, 'description' => 'Recargas'],
+                    ['filetype' => 11, 'description' => 'TED enviadas'],
+                    ['filetype' => 12, 'description' => 'TED recebidas'],
+                    ['filetype' => 13, 'description' => 'Tarifas'],
+                    ['filetype' => 14, 'description' => 'IOF'],
+                    ['filetype' => 15, 'description' => 'Bloqueios judiciais'],
+                ],
+            ],
+        ];
+    }
+
+    public static function incomeReportResponse(array $query): array
+    {
+        $account = trim((string) ($query['Account'] ?? ''));
+        $calendarYear = trim((string) ($query['CalendarYear'] ?? date('Y')));
+        $quarter = trim((string) ($query['Quarter'] ?? ''));
+
+        if ($account === '') {
+            return [
+                'version' => '1.0.0',
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'Account é obrigatório.'],
+            ];
+        }
+
+        $seed = hash('sha256', $account . '|' . $calendarYear . '|' . $quarter);
+        $isLegal = (hexdec(substr($seed, 0, 2)) % 4) === 0;
+        $documentNumber = $isLegal
+            ? str_pad((string) (hexdec(substr($seed, 0, 6)) % 99999999999999), 14, '0', STR_PAD_LEFT)
+            : str_pad((string) (hexdec(substr($seed, 0, 6)) % 99999999999), 11, '0', STR_PAD_LEFT);
+
+        $balance = round(10000 + (hexdec(substr($seed, 0, 4)) % 9999999) / 100, 2);
+        $pdfText = sprintf(
+            "Celcoin - Informe de Rendimentos\nAno-calendário: %s\nConta: %s\nDocumento: %s\nSaldo: R$ %s\n",
+            $calendarYear,
+            $account,
+            $documentNumber,
+            number_format($balance, 2, ',', '.')
+        );
+        $incomeFile = base64_encode("%PDF-1.4\n%mock\n" . $pdfText);
+
+        return [
+            'version' => '1.0.0',
+            'status' => 'SUCCESS',
+            'body' => [
+                'payerSource' => [
+                    'name' => 'CELCOIN INSTITUICAO DE PAGAMENTO S.A.',
+                    'documentNumber' => '13935893000109',
+                ],
+                'owner' => [
+                    'documentNumber' => $documentNumber,
+                    'name' => $isLegal ? 'EMPRESA HOMOLOGACAO LTDA' : 'CLIENTE HOMOLOGACAO',
+                    'type' => $isLegal ? 'LEGAL_PERSON' : 'NATURAL_PERSON',
+                    'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+                ],
+                'account' => [
+                    'branch' => '0001',
+                    'account' => $account,
+                ],
+                'balances' => [
+                    [
+                        'calendarYear' => $calendarYear,
+                        'amount' => $balance,
+                        'currency' => 'BRL',
+                        'type' => 'SALDO',
+                    ],
+                ],
+                'incomeFile' => $incomeFile,
+                'fileType' => 'application/pdf',
+            ],
+        ];
+    }
+
+    private static function missingProposalNaturalFields(array $payload): ?string
+    {
+        $required = ['clientCode', 'documentNumber', 'phoneNumber', 'email', 'motherName', 'fullName', 'birthDate', 'address'];
+        foreach ($required as $field) {
+            if (!isset($payload[$field]) || (is_string($payload[$field]) && trim($payload[$field]) === '')) {
+                return $field;
+            }
+        }
+        return null;
+    }
+
+    private static function missingProposalLegalFields(array $payload): ?string
+    {
+        $required = ['clientCode', 'contactNumber', 'documentNumber', 'businessEmail', 'businessName', 'tradingName', 'owner', 'businessAddress'];
+        foreach ($required as $field) {
+            if (!isset($payload[$field])) {
+                return $field;
+            }
+            if (is_string($payload[$field]) && trim($payload[$field]) === '') {
+                return $field;
+            }
+            if ($field === 'owner' && (!is_array($payload[$field]) || count($payload[$field]) === 0)) {
+                return $field;
+            }
+        }
+        return null;
+    }
 }

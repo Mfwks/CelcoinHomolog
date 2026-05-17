@@ -64,6 +64,13 @@ O microframework não restringe método HTTP no roteador; o método aceito é de
 | PUT     | `/baas-accountmanager/v1/account/business`                                           | `api/account-update-business`| Atualizar dados PJ                        |
 | DELETE  | `/baas-accountmanager/v1/account/close`                                              | `api/account-close`          | Encerrar conta                            |
 | GET     | `/baas-accountmanager/v1/account/fetch-business`                                     | `api/account-fetch-business` | Buscar conta PJ por documento             |
+| POST    | `/onboarding/v1/onboarding-proposal/natural-person`                                  | `api/onboarding-proposal-natural-person` | Criar proposta de onboarding PF       |
+| POST    | `/onboarding/v1/onboarding-proposal/legal-person`                                    | `api/onboarding-proposal-legal-person` | Criar proposta de onboarding PJ        |
+| GET     | `/onboarding/v1/onboarding-proposal`                                                 | `api/onboarding-proposal-list` | Consultar propostas com filtros           |
+| GET     | `/baas-walletreports/v1/wallet/movement`, `/baas/v2/wallet/movement`                 | `api/wallet-movement`        | Extrato/movimentação por conta            |
+| GET     | `/baas/v2/account/income-report`                                                     | `api/income-report`          | Informe de rendimentos (PDF base64)       |
+| GET     | `/tools-conciliation/v1/ConsolidatedStatement`                                       | `api/consolidated-statement` | Extrato consolidado (campos PT-BR)        |
+| GET     | `/tools-conciliation/v1/exportfile/types`                                            | `api/exportfile-types`       | Dicionário de tipos de arquivo            |
 
 ## Padrão de cada stream
 

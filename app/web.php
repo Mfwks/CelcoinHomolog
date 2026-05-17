@@ -98,3 +98,17 @@ $web->add('/baas-accountmanager/v1/account/fetch','api/account');
 $web->add('/baas-accountmanager/v1/account/status','api/account-status-update');
 $web->add('/baas-accountmanager/v1/account/natural-person','api/account-update-natural-person');
 
+# Onboarding proposal (KYC moderno com webview)
+$web->add('/onboarding/v1/onboarding-proposal/natural-person','api/onboarding-proposal-natural-person');
+$web->add('/onboarding/v1/onboarding-proposal/legal-person','api/onboarding-proposal-legal-person');
+$web->add('/onboarding/v1/onboarding-proposal','api/onboarding-proposal-list');
+
+# Wallet/Reports — extrato e relatórios
+$web->add('/baas-walletreports/v1/wallet/movement','api/wallet-movement');
+$web->add('/baas/v2/wallet/movement','api/wallet-movement'); // alias v2 canônico
+$web->add('/baas/v2/account/income-report','api/income-report');
+
+# Conciliação
+$web->add('/tools-conciliation/v1/ConsolidatedStatement','api/consolidated-statement');
+$web->add('/tools-conciliation/v1/exportfile/types','api/exportfile-types');
+

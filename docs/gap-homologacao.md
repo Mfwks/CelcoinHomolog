@@ -33,15 +33,18 @@ Derivado da especificação do sistema consumidor (arquivo local `HOMOLOGACAO_CE
 - [ ] `POST /baas-onboarding/v1/account/natural-person/bulk`
 - [ ] `POST /baas-onboarding/v1/account/business/create/bulk`
   - doc v2: **não consta na doc pública** — nenhuma página `/reference/` cobre bulk de onboarding. Pode ser interface legada do contrato do cliente; manter inferido a partir dos `create` quando for implementar.
-- [ ] `POST /onboarding/v1/onboarding-proposal/natural-person`
+- [x] `POST /onboarding/v1/onboarding-proposal/natural-person`
   - doc: https://developers.celcoin.com.br/reference/criar-proposta-pessoa-fisica.
   - Campos: `clientCode`, `documentNumber` (11), `phoneNumber` (≤14), `email` (≤100), `motherName`, `fullName` (≤120), `socialName?`, `birthDate`, `address`, `isPoliticallyExposedPerson?` (default `false`), `onboardingType` (default `BAAS`).
-- [ ] `POST /onboarding/v1/onboarding-proposal/legal-person`
+  - Stream: `api/onboarding-proposal-natural-person`. Webhook `onboarding-proposal` agendado em 3s.
+- [x] `POST /onboarding/v1/onboarding-proposal/legal-person`
   - doc: https://developers.celcoin.com.br/reference/criar-proposta-pessoa-juridica.
   - Campos: `clientCode`, `contactNumber` (≤14), `documentNumber` (14), `businessEmail` (≤100), `businessName` (≤350), `tradingName` (≤120), `companyType` (enum `PJ`/`MEI`/`ME`, default `PJ`), `owner` (array — quadro societário), `businessAddress`, `onboardingType` (default `BAAS`).
-- [ ] `GET  /onboarding/v1/onboarding-proposal`
+  - Stream: `api/onboarding-proposal-legal-person`. Webhook `onboarding-proposal` agendado em 3s.
+- [x] `GET  /onboarding/v1/onboarding-proposal`
   - doc: https://developers.celcoin.com.br/reference/consultar-proposta.
   - Query: `ProposalId?`, `ClientCode?`, `DateFrom?`, `DateTo?`, `Status?` (enum: `CREATED`/`PENDING`/`PENDING_DOCUMENTSCOPY`/`APPROVED`/`REPROVED`/`RESOURCE_ERROR`/`RESOURCE_CREATED`/`PROCESSING_DOCUMENTSCOPY`), `DocumentNumber?`, `Page` (default 1), `Limit` (1–200, default 200), `LimitPerPage` (1–200, default 200 — duplicado com `Limit`, vestígio histórico).
+  - Stream: `api/onboarding-proposal-list`. Filtros aplicados sobre `onboarding_proposals` persistidos.
 
 > Nota: spec do consumidor descreve a chave de resposta como `onboardingId`, mas o log real do produtor mostra `onBoardingId` (capital B). Implementação seguiu o log.
 
@@ -68,29 +71,33 @@ Derivado da especificação do sistema consumidor (arquivo local `HOMOLOGACAO_CE
 ## 4. Wallet / Reports
 
 - [x] `GET      /baas-walletreports/v1/wallet/balance`
-- [ ] `GET      /baas-walletreports/v1/wallet/movement`
+- [x] `GET      /baas-walletreports/v1/wallet/movement`
   - doc v2: https://developers.celcoin.com.br/reference/consultar-extrato (canônico: `/baas/v2/wallet/movement`).
   - Query: `Account?`, `DocumentNumber?`, `DateFrom` (`yyyy-MM-dd`, obrigatório), `DateTo` (idem, obrigatório), `LimitPerPage?`, `Page?`, `Order` (`asc`/`desc` minúsculas, default `asc`).
-- [ ] `GET      /tools-conciliation/v1/ConsolidatedStatement`
+  - Stream: `api/wallet-movement` (atende legado e alias `/baas/v2/wallet/movement`). Gera 2–5 movimentos mockados por seed da conta+período; counterParty incluído.
+- [x] `GET      /tools-conciliation/v1/ConsolidatedStatement`
   - doc: https://developers.celcoin.com.br/reference/consultar-extrato-consolidado.
   - Query: `startDate` (date), `endDate` (date), `page` (default 1), `quantity` (default 1000). Janela máx 15 dias na v2.
   - Campos da resposta (português): `dataContabil`, `nomeHistorico`, `qtdOperacoes`, `debito`, `credito`, `saldoDia`, `saldo`, `historicoId`, `nsa`.
   - URL é **case-sensitive** com `C` maiúsculo em `ConsolidatedStatement`.
+  - Stream: `api/consolidated-statement`. Valida janela ≤15 dias; gera 1–3 linhas por dia com tipos típicos (PIX_IN/OUT, TED, TARIFA, BOLETO). Erros `AttributeValidation`/`DateValidation`.
 - [ ] `GET      /tools-conciliation/v1/exportfile`
   - doc: https://developers.celcoin.com.br/reference/extrair-arquivo (canônico com barra final: `/tools-conciliation/v1/exportfile/`).
   - Query (lowercase sem separador): `filetype` (int32 obrigatório), `accountdate` (`YYYY-MM-DD` obrigatório), `page` (default 1), `quantity` (default 1000).
   - Response polimórfica (15 schemas por tipo de arquivo). Disponível só a partir das 06h do dia, janela máx 6 meses para trás, dados desde jul/2022.
-- [ ] `GET      /tools-conciliation/v1/exportfile/types`
+- [x] `GET      /tools-conciliation/v1/exportfile/types`
   - doc: https://developers.celcoin.com.br/reference/buscar-tipos-de-arquivos.
   - Sem query params. Dicionário do `filetype` numérico usado pelo `exportfile`.
+  - Stream: `api/exportfile-types`. Retorna lista de 15 tipos numerados conforme convenção da doc.
 - [x] `POST|PUT /baas-wallet-transactions-webservice/v1/wallet/entry/{conta}`
   - doc: https://developers.celcoin.com.br/reference/gerar-lan%C3%A7amento-1.
   - **Método na doc é apenas POST** (não PUT). Apenas sandbox (não funciona em produção). Campos: `clientCode` (≤200), `amount` (>0), `type` (`CREDIT`/`DEBIT` — tutorial diz só `CREDIT`, mas referência diz "Crédito ou Débito"), `description?` (≤250).
   - ✅ Revisado: status alterado de `SUCCESS` → `CONFIRMED` conforme doc. Stream aceita ambos POST e PUT (rota agnóstica) — manter alias até o consumidor confirmar.
-- [ ] `GET      /baas/v2/account/income-report`
+- [x] `GET      /baas/v2/account/income-report`
   - doc: https://developers.celcoin.com.br/reference/consultar-informe-de-rendimentos.
   - Query: `Account`, `CalendarYear` (default `2023`), `Quarter` (default `1`, só PJ).
   - Response: `body.payerSource{name,documentNumber}`, `body.owner{documentNumber,name,type:NATURAL_PERSON|LEGAL_PERSON,createDate}`, `body.account{branch,account}`, `body.balances[]{calendarYear,amount,currency:BRL,type:SALDO}`, `body.incomeFile` (base64 do PDF — senha = 6 primeiros dígitos do documento), `body.fileType`.
+  - Stream: `api/income-report`. PDF mockado em base64 com texto identificador.
 
 ## 5. Internal transfer
 
