@@ -103,6 +103,14 @@ $web->add('/onboarding/v1/onboarding-proposal/natural-person','api/onboarding-pr
 $web->add('/onboarding/v1/onboarding-proposal/legal-person','api/onboarding-proposal-legal-person');
 $web->add('/onboarding/v1/onboarding-proposal','api/onboarding-proposal-list');
 
+# Onboarding bulk (PF e PJ; kind detectado via URI)
+$web->add('/baas-onboarding/v1/account/natural-person/create/bulk','api/onboarding-bulk');
+$web->add('/baas-onboarding/v1/account/natural-person/bulk','api/onboarding-bulk');
+$web->add('/baas-onboarding/v1/account/business/create/bulk','api/onboarding-bulk');
+
+# KYC v1 fileupload (multipart; descontinuado em 2025-04-29 mas mantido p/ consumidores legados)
+$web->add('/celcoinkyc/document/v1/fileupload','api/kyc-fileupload');
+
 # Wallet/Reports — extrato e relatórios
 $web->add('/baas-walletreports/v1/wallet/movement','api/wallet-movement');
 $web->add('/baas/v2/wallet/movement','api/wallet-movement'); // alias v2 canônico
@@ -111,4 +119,6 @@ $web->add('/baas/v2/account/income-report','api/income-report');
 # Conciliação
 $web->add('/tools-conciliation/v1/ConsolidatedStatement','api/consolidated-statement');
 $web->add('/tools-conciliation/v1/exportfile/types','api/exportfile-types');
+$web->add('/tools-conciliation/v1/exportfile','api/exportfile');
+$web->add('/tools-conciliation/v1/exportfile/','api/exportfile');
 

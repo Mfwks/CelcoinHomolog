@@ -71,6 +71,9 @@ O microframework não restringe método HTTP no roteador; o método aceito é de
 | GET     | `/baas/v2/account/income-report`                                                     | `api/income-report`          | Informe de rendimentos (PDF base64)       |
 | GET     | `/tools-conciliation/v1/ConsolidatedStatement`                                       | `api/consolidated-statement` | Extrato consolidado (campos PT-BR)        |
 | GET     | `/tools-conciliation/v1/exportfile/types`                                            | `api/exportfile-types`       | Dicionário de tipos de arquivo            |
+| GET     | `/tools-conciliation/v1/exportfile`, `/tools-conciliation/v1/exportfile/`            | `api/exportfile`             | Extrair arquivo por `filetype` + data     |
+| POST    | `/baas-onboarding/v1/account/{natural-person,business}/create/bulk`, `.../natural-person/bulk` | `api/onboarding-bulk` | Onboarding em lote (PF/PJ)                |
+| POST    | `/celcoinkyc/document/v1/fileupload`                                                 | `api/kyc-fileupload`         | KYC v1 multipart (descontinuado, legado)  |
 
 ## Padrão de cada stream
 

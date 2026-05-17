@@ -29,10 +29,11 @@ Derivado da especificação do sistema consumidor (arquivo local `HOMOLOGACAO_CE
 - [x] `POST /baas-onboarding/v1/account/business/create`
   - doc v2: https://developers.celcoin.com.br/reference/criar-conta-pj (canônico: `/baas/v2/account/business/create`).
   - Campos: `clientCode`, `documentNumber` (CNPJ), `contactNumber`, `businessEmail`, `businessName`, `tradingName`, `owner`, `businessAddress`, `cadastraChavePix?`, `financialCompanyDetails?`, `accountOnboardingType`.
-- [ ] `POST /baas-onboarding/v1/account/natural-person/create/bulk`
-- [ ] `POST /baas-onboarding/v1/account/natural-person/bulk`
-- [ ] `POST /baas-onboarding/v1/account/business/create/bulk`
-  - doc v2: **não consta na doc pública** — nenhuma página `/reference/` cobre bulk de onboarding. Pode ser interface legada do contrato do cliente; manter inferido a partir dos `create` quando for implementar.
+- [x] `POST /baas-onboarding/v1/account/natural-person/create/bulk`
+- [x] `POST /baas-onboarding/v1/account/natural-person/bulk`
+- [x] `POST /baas-onboarding/v1/account/business/create/bulk`
+  - doc v2: **não consta na doc pública** — nenhuma página `/reference/` cobre bulk de onboarding. Inferência a partir do shape do `create`.
+  - Stream: `api/onboarding-bulk` (kind PF/PJ detectado via URI). Aceita body como array direto ou `{items: [...]}`. Retorna `{status: PROCESSING|PARTIAL|ERROR, body: {items[], totalItems, accepted, rejected}}`. HTTP 207 em PARTIAL. Webhooks `onboarding-create` agendados apenas para items aceitos.
 - [x] `POST /onboarding/v1/onboarding-proposal/natural-person`
   - doc: https://developers.celcoin.com.br/reference/criar-proposta-pessoa-fisica.
   - Campos: `clientCode`, `documentNumber` (11), `phoneNumber` (≤14), `email` (≤100), `motherName`, `fullName` (≤120), `socialName?`, `birthDate`, `address`, `isPoliticallyExposedPerson?` (default `false`), `onboardingType` (default `BAAS`).
@@ -50,10 +51,11 @@ Derivado da especificação do sistema consumidor (arquivo local `HOMOLOGACAO_CE
 
 ## 2. KYC
 
-- [ ] `POST /celcoinkyc/document/v1/fileupload` (multipart)
+- [x] `POST /celcoinkyc/document/v1/fileupload` (multipart)
   - doc: sem página `/reference/`; canônica é o suporte: https://suporte.celcoin.com.br/hc/pt-br/articles/21976851137947.
   - Campos multipart (lowercase sem separador): `cnpj`, `documentnumber` (CPF), `filetype` (`CNH`/`RG`/`PASSPORT`/`RNE`), `front` (file), `onboardingId` (UUID, obrigatório desde 2024-02-27).
-  - **Atenção**: KYC v1 foi descontinuado em 2025-04-29 (https://suporte.celcoin.com.br/hc/pt-br/articles/35833363119387). Sucessor é o webview pelo `onboarding-proposal`. Implementar só se o consumidor ainda chama.
+  - **Atenção**: KYC v1 foi descontinuado em 2025-04-29 (https://suporte.celcoin.com.br/hc/pt-br/articles/35833363119387). Sucessor é o webview pelo `onboarding-proposal`. Mantido no simulador para consumidores legados.
+  - Stream: `api/kyc-fileupload`. Valida `onboardingId`, `documentnumber`, `filetype` (enum) e arquivo `front`. Persiste em `kyc_uploads`. Webhook `kyc` agendado em 3s.
 
 ## 3. AccountManager
 
@@ -81,10 +83,11 @@ Derivado da especificação do sistema consumidor (arquivo local `HOMOLOGACAO_CE
   - Campos da resposta (português): `dataContabil`, `nomeHistorico`, `qtdOperacoes`, `debito`, `credito`, `saldoDia`, `saldo`, `historicoId`, `nsa`.
   - URL é **case-sensitive** com `C` maiúsculo em `ConsolidatedStatement`.
   - Stream: `api/consolidated-statement`. Valida janela ≤15 dias; gera 1–3 linhas por dia com tipos típicos (PIX_IN/OUT, TED, TARIFA, BOLETO). Erros `AttributeValidation`/`DateValidation`.
-- [ ] `GET      /tools-conciliation/v1/exportfile`
+- [x] `GET      /tools-conciliation/v1/exportfile`
   - doc: https://developers.celcoin.com.br/reference/extrair-arquivo (canônico com barra final: `/tools-conciliation/v1/exportfile/`).
   - Query (lowercase sem separador): `filetype` (int32 obrigatório), `accountdate` (`YYYY-MM-DD` obrigatório), `page` (default 1), `quantity` (default 1000).
   - Response polimórfica (15 schemas por tipo de arquivo). Disponível só a partir das 06h do dia, janela máx 6 meses para trás, dados desde jul/2022.
+  - Stream: `api/exportfile`. Schemas por `filetype` no helper privado `exportFileRecordsByType`+`exportFileRecordSchema` cobrindo os 15 tipos (movimentação, recusas, transferências, pix in/out/devoluções, boletos pagos/emitidos, débito veicular, recargas, TED in/out, tarifas, IOF, bloqueios judiciais). Erros `AttributeValidation`/`FileNotFound`.
 - [x] `GET      /tools-conciliation/v1/exportfile/types`
   - doc: https://developers.celcoin.com.br/reference/buscar-tipos-de-arquivos.
   - Sem query params. Dicionário do `filetype` numérico usado pelo `exportfile`.
@@ -241,8 +244,8 @@ São quirks confirmados na doc oficial — não corrigir, replicar fielmente:
 2. ~~**`/baas-webhookmanager/v1/webhook/subscription`** — estender métodos~~ — resolvido: stream atende GET (lista + filtros Entity/Active), POST/PUT/PATCH (criar/atualizar) e DELETE (por path `{entity}` ou query `?Entity=`). Rotas adicionais registradas no `web.php`.
 3. **Trailing slash** — várias rotas atuais foram registradas com `/` final (`/baas-onboarding/v1/account/check/`, `.../fetch/`). O cliente envia sem barra. Conferir se o roteador normaliza; se não, duplicar registro ou padronizar.
 4. **mTLS** — opcional pelo spec; o ambiente Apache deve aceitar conexão sem cert. Confirmar config.
-5. **Bulk de onboarding** — `/create/bulk` e `/bulk` em PF e PJ não constam da doc pública v2. Se o consumidor realmente chama, manter inferência a partir do `create` (array de objetos com mesmos campos, resposta com array de `onBoardingId`).
-6. **KYC v1 descontinuado** — `/celcoinkyc/document/v1/fileupload` foi descontinuado em 2025-04-29. Manter no simulador apenas se o consumidor ainda usa.
+5. ~~**Bulk de onboarding**~~ — resolvido: 3 rotas (`natural-person/create/bulk`, `natural-person/bulk`, `business/create/bulk`) apontam para `api/onboarding-bulk` que aceita array direto ou `{items: [...]}` e responde com `{status, body: {items, totalItems, accepted, rejected}}`. HTTP 207 em sucesso parcial.
+6. ~~**KYC v1 descontinuado**~~ — implementado em `api/kyc-fileupload` para consumidores legados; doc canônica do shape é a página de suporte (https://suporte.celcoin.com.br/hc/pt-br/articles/21976851137947).
 7. **`fetch-business`** — não existe rota dedicada na doc v2 (PF e PJ unificados em `/baas/v2/account/fetch`). Stream atual segue o nome legado do consumidor; shape do PJ deve seguir `fetch` da doc v2.
 
 ## Prioridade sugerida

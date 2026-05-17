@@ -2749,4 +2749,317 @@ class Cslabs
         }
         return null;
     }
+
+    public static function onboardingBulkResponse(array $payload, string $kind): array
+    {
+        $items = $payload;
+        if (isset($payload['items']) && is_array($payload['items'])) {
+            $items = $payload['items'];
+        }
+
+        if (!is_array($items) || $items === [] || !isset($items[0])) {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE001', 'message' => 'Body deve ser array de contas ou objeto com chave "items".'],
+            ];
+        }
+
+        $results = [];
+        $accepted = 0;
+        $rejected = 0;
+
+        foreach ($items as $index => $item) {
+            if (!is_array($item)) {
+                $results[] = [
+                    'index' => $index,
+                    'status' => 'ERROR',
+                    'error' => ['errorCode' => 'CBE001', 'message' => 'Item inválido.'],
+                ];
+                $rejected++;
+                continue;
+            }
+
+            $single = self::onboardingResponse($item, $kind);
+            if (($single['status'] ?? null) === 'ERROR') {
+                $results[] = [
+                    'index' => $index,
+                    'clientCode' => (string) ($item['clientCode'] ?? ''),
+                    'documentNumber' => preg_replace('/\D+/', '', (string) ($item['documentNumber'] ?? '')) ?: '',
+                    'status' => 'ERROR',
+                    'error' => $single['error'],
+                ];
+                $rejected++;
+            } else {
+                $results[] = [
+                    'index' => $index,
+                    'clientCode' => (string) ($item['clientCode'] ?? ''),
+                    'documentNumber' => preg_replace('/\D+/', '', (string) ($item['documentNumber'] ?? '')) ?: '',
+                    'status' => 'PROCESSING',
+                    'onBoardingId' => $single['body']['onBoardingId'],
+                ];
+                $accepted++;
+            }
+        }
+
+        return [
+            'version' => '1.0.0',
+            'status' => $rejected === 0 ? 'PROCESSING' : ($accepted === 0 ? 'ERROR' : 'PARTIAL'),
+            'body' => [
+                'items' => $results,
+                'totalItems' => count($results),
+                'accepted' => $accepted,
+                'rejected' => $rejected,
+            ],
+        ];
+    }
+
+    public static function kycFileUploadResponse(array $form, array $files): array
+    {
+        // KYC v1: campos em lowercase sem separador, conforme doc oficial.
+        $cnpj = trim((string) ($form['cnpj'] ?? ''));
+        $documentNumber = trim((string) ($form['documentnumber'] ?? ''));
+        $filetype = strtoupper(trim((string) ($form['filetype'] ?? '')));
+        $onboardingId = trim((string) ($form['onboardingId'] ?? ''));
+        $front = $files['front'] ?? null;
+
+        $allowedTypes = ['CNH', 'RG', 'PASSPORT', 'RNE'];
+
+        if ($onboardingId === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'onboardingId é obrigatório (multipart text).'],
+            ];
+        }
+        if ($documentNumber === '') {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'documentnumber é obrigatório (multipart text, lowercase).'],
+            ];
+        }
+        if (!in_array($filetype, $allowedTypes, true)) {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'filetype inválido. Aceita: ' . implode(', ', $allowedTypes) . '.'],
+            ];
+        }
+        if (!is_array($front) || ($front['size'] ?? 0) <= 0) {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'front é obrigatório (multipart file).'],
+            ];
+        }
+
+        $fileId = gerarHashMock();
+        $record = [
+            'fileId' => $fileId,
+            'onboardingId' => $onboardingId,
+            'documentNumber' => preg_replace('/\D+/', '', $documentNumber) ?: $documentNumber,
+            'cnpj' => preg_replace('/\D+/', '', $cnpj) ?: $cnpj,
+            'filetype' => $filetype,
+            'originalFileName' => (string) ($front['name'] ?? 'upload.bin'),
+            'fileSize' => (int) ($front['size'] ?? 0),
+            'mimeType' => (string) ($front['type'] ?? 'application/octet-stream'),
+            'status' => 'PROCESSING',
+            'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
+        ];
+
+        self::writeEntity('kyc_uploads', $fileId, $record);
+        self::writeEntity('kyc_uploads_by_onboarding', $onboardingId, ['fileId' => $fileId]);
+
+        return [
+            'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'body' => [
+                'fileId' => $fileId,
+                'onboardingId' => $onboardingId,
+                'filetype' => $filetype,
+                'status' => 'PROCESSING',
+                'createDate' => $record['createDate'],
+            ],
+        ];
+    }
+
+    public static function exportFileResponse(array $query): array
+    {
+        $filetype = (int) ($query['filetype'] ?? 0);
+        $accountdate = trim((string) ($query['accountdate'] ?? ''));
+        $page = max(1, (int) ($query['page'] ?? 1));
+        $quantity = max(1, (int) ($query['quantity'] ?? 1000));
+
+        if ($filetype <= 0) {
+            return [
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'AttributeValidation', 'message' => 'filetype é obrigatório (numérico).'],
+            ];
+        }
+        if ($accountdate === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $accountdate)) {
+            return [
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'AttributeValidation', 'message' => 'accountdate é obrigatório no formato YYYY-MM-DD.'],
+            ];
+        }
+
+        $typeMap = [
+            1  => 'Movimentação',
+            2  => 'Recusas',
+            3  => 'Transferências',
+            4  => 'Pix enviados',
+            5  => 'Pix recebidos',
+            6  => 'Pix devoluções',
+            7  => 'Boletos pagos',
+            8  => 'Boletos emitidos',
+            9  => 'Débito veicular',
+            10 => 'Recargas',
+            11 => 'TED enviadas',
+            12 => 'TED recebidas',
+            13 => 'Tarifas',
+            14 => 'IOF',
+            15 => 'Bloqueios judiciais',
+        ];
+
+        if (!isset($typeMap[$filetype])) {
+            return [
+                'status' => 'ERROR',
+                'error' => ['errorCode' => 'FileNotFound', 'message' => 'filetype não encontrado. Consulte /exportfile/types.'],
+            ];
+        }
+
+        $records = self::exportFileRecordsByType($filetype, $accountdate);
+        $total = count($records);
+        $offset = ($page - 1) * $quantity;
+
+        return [
+            'status' => 'SUCCESS',
+            'body' => [
+                'filetype' => $filetype,
+                'description' => $typeMap[$filetype],
+                'accountdate' => $accountdate,
+                'records' => array_slice($records, $offset, $quantity),
+                'totalRecords' => $total,
+                'page' => $page,
+                'quantity' => $quantity,
+            ],
+        ];
+    }
+
+    private static function exportFileRecordsByType(int $filetype, string $accountdate): array
+    {
+        $seed = hash('sha256', $filetype . '|' . $accountdate);
+        $count = (hexdec(substr($seed, 0, 2)) % 4) + 2; // 2..5
+        $records = [];
+        $baseTs = strtotime($accountdate . ' 09:00:00') ?: time();
+
+        for ($i = 0; $i < $count; $i++) {
+            $chunk = substr($seed, $i * 6, 12) ?: $seed;
+            $ts = $baseTs + ($i * 1800);
+            $amount = round((hexdec(substr($chunk, 0, 4)) % 50000) / 100 + 5, 2);
+            $records[] = self::exportFileRecordSchema($filetype, $i, $chunk, $ts, $amount);
+        }
+        return $records;
+    }
+
+    private static function exportFileRecordSchema(int $filetype, int $index, string $chunk, int $ts, float $amount): array
+    {
+        $id = gerarHashMock();
+        $date = gmdate('Y-m-d\TH:i:s\Z', $ts);
+
+        switch ($filetype) {
+            case 1: // Movimentação
+                $isCredit = (hexdec(substr($chunk, 0, 2)) % 2) === 0;
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'type' => $isCredit ? 'CREDIT' : 'DEBIT',
+                    'description' => $isCredit ? 'Crédito em conta' : 'Débito em conta',
+                ];
+            case 2: // Recusas
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'reason' => 'INSUFFICIENT_FUNDS',
+                    'reasonDescription' => 'Saldo insuficiente.',
+                    'originalTransactionId' => substr($chunk, 0, 12),
+                ];
+            case 3: // Transferências
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'direction' => ($index % 2) === 0 ? 'IN' : 'OUT',
+                    'counterParty' => [
+                        'name' => 'CONTRAPARTE HOMOLOG', 'documentNumber' => '12345678901',
+                        'bank' => '341', 'branch' => '0001', 'account' => '12345-6',
+                    ],
+                ];
+            case 4: // Pix enviados
+            case 5: // Pix recebidos
+                $direction = $filetype === 4 ? 'OUT' : 'IN';
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount, 'direction' => $direction,
+                    'endToEndId' => 'E13935893' . date('YmdHi', $ts) . substr($chunk, 0, 11),
+                    'key' => 'teste' . $index . '@pix.com', 'keyType' => 'EMAIL',
+                    'counterParty' => [
+                        'name' => $direction === 'IN' ? 'PAGADOR HOMOLOG' : 'RECEBEDOR HOMOLOG',
+                        'documentNumber' => '12345678901',
+                    ],
+                ];
+            case 6: // Pix devoluções
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'originalPaymentId' => substr($chunk, 0, 12),
+                    'reason' => 'MD06', 'reasonDescription' => 'Cliente final solicitou.',
+                ];
+            case 7: // Boletos pagos
+            case 8: // Boletos emitidos
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'barcode' => '34191' . substr($chunk, 0, 39),
+                    'dueDate' => gmdate('Y-m-d', $ts + (5 * 86400)),
+                    'beneficiary' => 'BENEFICIARIO HOMOLOG',
+                    'status' => $filetype === 7 ? 'PAID' : 'REGISTERED',
+                ];
+            case 9: // Débito veicular
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'plate' => 'ABC' . str_pad((string) (hexdec(substr($chunk, 0, 4)) % 9999), 4, '0', STR_PAD_LEFT),
+                    'renavam' => str_pad((string) (hexdec(substr($chunk, 0, 8)) % 99999999999), 11, '0', STR_PAD_LEFT),
+                    'category' => 'IPVA',
+                ];
+            case 10: // Recargas
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'operator' => ($index % 2) === 0 ? 'TIM' : 'VIVO',
+                    'phoneNumber' => '+551199999' . str_pad((string) $index, 4, '0', STR_PAD_LEFT),
+                ];
+            case 11: // TED enviadas
+            case 12: // TED recebidas
+                $direction = $filetype === 11 ? 'OUT' : 'IN';
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount, 'direction' => $direction,
+                    'numCtrlStr' => 'STR' . date('Ymd', $ts) . substr($chunk, 0, 9),
+                    'counterParty' => [
+                        'name' => 'CONTRAPARTE HOMOLOG', 'documentNumber' => '12345678901',
+                        'bank' => '237', 'branch' => '0001', 'account' => '67890-1',
+                    ],
+                ];
+            case 13: // Tarifas
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'tariffType' => 'TED', 'description' => 'Tarifa TED enviada',
+                ];
+            case 14: // IOF
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'baseAmount' => round($amount / 0.0038, 2), 'rate' => 0.0038,
+                ];
+            case 15: // Bloqueios judiciais
+                return [
+                    'id' => $id, 'date' => $date, 'amount' => $amount,
+                    'orderNumber' => 'BC-' . substr($chunk, 0, 10), 'court' => 'TJSP', 'status' => 'BLOCKED',
+                ];
+            default:
+                return ['id' => $id, 'date' => $date, 'amount' => $amount];
+        }
+    }
 }
