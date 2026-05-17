@@ -40,7 +40,8 @@ Códigos de erro internos seguem o padrão `CSLAB<NNN>`.
 ## Roteamento
 
 - `$web->add('/path', 'subdir/file')` — `subdir/file` é resolvido como `app/streams/subdir/file.php`.
-- Parâmetros de rota usam chaves: `'/shots/{identifier}/'`. A captura é responsabilidade do `Web` router; o stream lê via contexto/`$_GET`.
+- Parâmetros de rota usam chaves: `'/shots/{identifier}/'`. O `Web` router captura via regex `[^/]+` e expõe em `$web->args->identifier` (lido dentro do stream como variável global).
+- **Trailing slash é normalizado automaticamente** em `Web::add()` e em `Web::request()` (ambos forçam `'/' . trim(...) . '/'`). Logo, `/foo` e `/foo/` resolvem para a mesma rota — **não registrar as duas variantes**.
 - Métodos HTTP **não** são restritos pelo router. Se um endpoint precisa rejeitar método, faz isso no próprio stream.
 
 ## Prefixo `/celcoin/` (legado)

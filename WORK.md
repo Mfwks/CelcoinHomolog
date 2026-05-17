@@ -8,12 +8,12 @@ Arquivo vivo, três seções. Cada linha: `YYYY-MM-DD · descrição curta · re
 
 ## Próximo
 
-- 2026-05-17 · Trailing slash: conferir se o roteador normaliza ou se precisamos duplicar mais rotas.
-- 2026-05-17 · mTLS: confirmar config do Apache para aceitar conexão sem cert (opcional pelo spec).
+- 2026-05-17 · mTLS: confirmar config do Apache para aceitar conexão sem cert (opcional pelo spec). Ambiente real.
 - 2026-05-17 · Quando logs reais chegarem, revisar shape de: bulk onboarding (3 variantes inferidas), claims (5 endpoints), QR estático/dinâmico criar, DELETE charge, AccountManager business/close/fetch-business, SPB reversal, KYC fileupload, exportfile (15 schemas inferidos).
 
 ## Concluído recente
 
+- 2026-05-17 · Trailing slash auditado: `Web::add()` e `Web::request()` normalizam ambos os lados, então `/foo` e `/foo/` são equivalentes. Convenção documentada em `docs/conventions.md` (não registrar duas variantes) e 5 duplicatas removidas do `web.php` (`/501`, `account/check`, `account/fetch`, `dict/entry/external/{account}`, `exportfile`). Discrepância #3 do gap fechada.
 - 2026-05-17 · 3 últimos pendentes do gap implementados: bulk onboarding PF/PJ (3 rotas → `api/onboarding-bulk`, aceita array ou `{items}`, HTTP 207 em PARTIAL, webhooks só para aceitos), KYC v1 fileupload multipart (`api/kyc-fileupload`, valida `onboardingId`/`documentnumber`/`filetype` enum + arquivo `front`, persiste em `kyc_uploads`), exportfile polimórfico (`api/exportfile`, helper `exportFileRecordSchema` com schemas distintos para os 15 `filetype`).
 - 2026-05-17 · 7 endpoints novos implementados a partir da doc oficial: onboarding proposal (POST PF, POST PJ, GET com filtros e paginação), `GET /baas-walletreports/v1/wallet/movement` (+ alias `/baas/v2/wallet/movement`) com counterParty e seed determinística, `GET /tools-conciliation/v1/ConsolidatedStatement` com campos PT-BR (`dataContabil`/`nomeHistorico`/`saldoDia`/etc) e validação de janela ≤15d, `GET /tools-conciliation/v1/exportfile/types` (dicionário de 15 tipos), `GET /baas/v2/account/income-report` com `incomeFile` PDF base64. Cslabs ganhou 6 métodos novos + 2 validadores de campos.
 - 2026-05-17 · Streams marcados como "shape inferido" revisados contra a doc oficial: `pixReverseResponse` ganhou `originalPaymentId`/`returnIdentification`/`additionalInformation` e default `reason=MD06`; `pixDictClaimResponse` expandiu com `claimerAccount`/`claimer`/`donorParticipant`/períodos + helper `buildPixDictClaimBody` que aplica grafia Pascal no `keyType` da response (EMAIL→Email, PHONE→Phone); `brcodeDynamicCreateResponse` retorna `amount.original` como string (`"5000.00"`); `walletEntryResponse` agora retorna status `CONFIRMED`; `accountFetchBusinessResponse` aceita `Account` ou `DocumentNumber` e devolve `businessAddress`+`owner[]`; `pixDictClaimListResponse` com default `limitPerPage=10`.

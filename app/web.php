@@ -15,7 +15,6 @@ $web->add('/404','pages/404');
 $web->add('/429','pages/429');
 $web->add('/500','pages/500');
 $web->add('/501','pages/501');
-$web->add('/501','pages/501');
 $web->add('/502','pages/502');
 $web->add('/504','pages/504');
 
@@ -83,17 +82,14 @@ $web->add('/pix/v1/brcode/static/{transactionId}/base64','api/brcode-static-base
 $web->add('/pix/v1/emv','api/emv');
 $web->add('/pix/v1/collection/immediate/payload/{payload}','api/collection-payload');
 $web->add('/pix/v1/collection/duedate/payload/{payload}','api/collection-payload');
-$web->add('/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/external/{account}/','api/key');
-$web->add('/baas/v2/pix/dict/entry/external/{account}/','api/key'); // alias legado/v2
-$web->add('/baas/v2/pix/dict/entry/external/{account}','api/key');
+$web->add('/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/external/{account}','api/key');
+$web->add('/baas/v2/pix/dict/entry/external/{account}','api/key'); // alias v2 canônico
 $web->add('/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry','api/dict-entry-create');
 $web->add('/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/{key}','api/dict-entry-delete');
 
-$web->add('/baas-onboarding/v1/account/check/','api/account-status');
 $web->add('/baas-onboarding/v1/account/check','api/account-status');
 $web->add('/baas-onboarding/v1/account/natural-person/create','api/onboarding-natural-person');
 $web->add('/baas-onboarding/v1/account/business/create','api/onboarding-business');
-$web->add('/baas-accountmanager/v1/account/fetch/','api/account');
 $web->add('/baas-accountmanager/v1/account/fetch','api/account');
 $web->add('/baas-accountmanager/v1/account/status','api/account-status-update');
 $web->add('/baas-accountmanager/v1/account/natural-person','api/account-update-natural-person');
@@ -120,5 +116,4 @@ $web->add('/baas/v2/account/income-report','api/income-report');
 $web->add('/tools-conciliation/v1/ConsolidatedStatement','api/consolidated-statement');
 $web->add('/tools-conciliation/v1/exportfile/types','api/exportfile-types');
 $web->add('/tools-conciliation/v1/exportfile','api/exportfile');
-$web->add('/tools-conciliation/v1/exportfile/','api/exportfile');
 
