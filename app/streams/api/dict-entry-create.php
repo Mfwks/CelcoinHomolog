@@ -33,7 +33,11 @@ if (($response['status'] ?? null) === 'ERROR') {
 $key = $response['body']['key'];
 $account = $response['body']['account']['account'];
 
-Db::transaction(function () use ($key, $account, $response) {
+$duplicate = Db::transaction(function () use ($key, $account, $response) {
+    $dup = Cslabs::pixDictDuplicateError($key, $account);
+    if ($dup !== null) {
+        return $dup;
+    }
     Cslabs::writeEntity('pix_dict_entries', $key, [
         'key' => $key,
         'keyType' => $response['body']['keyType'],
@@ -42,6 +46,13 @@ Db::transaction(function () use ($key, $account, $response) {
         'created_at' => date(DATE_ATOM),
     ]);
     Cslabs::writeEntity('pix_dict_entries_by_account', $account . '_' . $response['body']['keyType'], ['key' => $key]);
+    return null;
 });
+
+if (is_array($duplicate)) {
+    http_response_code(400);
+    echo json_encode($duplicate, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    return;
+}
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

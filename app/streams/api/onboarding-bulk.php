@@ -29,6 +29,7 @@ if (($response['status'] ?? null) === 'ERROR') {
     http_response_code(207);
 }
 
+$rawItems = is_array($body['items'] ?? null) ? $body['items'] : $body;
 $accepted = [];
 foreach ($response['body']['items'] ?? [] as $item) {
     if (($item['status'] ?? null) !== 'PROCESSING') {
@@ -37,12 +38,16 @@ foreach ($response['body']['items'] ?? [] as $item) {
     $onboardingId = $item['onBoardingId'];
     $documentNumber = (string) ($item['documentNumber'] ?? '');
     $clientCode = (string) ($item['clientCode'] ?? '');
+    $index = $item['index'] ?? null;
+    $sourceItem = is_int($index) && isset($rawItems[$index]) && is_array($rawItems[$index]) ? $rawItems[$index] : [];
     $account = Cslabs::generateAccountNumber($onboardingId . '|' . $documentNumber);
 
     $accepted[] = [
         'onboardingId' => $onboardingId,
         'documentNumber' => $documentNumber,
         'clientCode' => $clientCode,
+        'emailKey' => Cslabs::onboardingEmailKey($sourceItem, $kind),
+        'phoneKey' => Cslabs::onboardingPhoneKey($sourceItem, $kind),
         'account' => $account,
     ];
 }
@@ -64,6 +69,12 @@ Db::transaction(function () use ($accepted, $kind) {
         }
         if ($a['documentNumber'] !== '') {
             Cslabs::writeEntity('onboardings_by_document', $a['documentNumber'], ['onboardingId' => $a['onboardingId']]);
+        }
+        if ($a['emailKey'] !== '') {
+            Cslabs::writeEntity('onboardings_by_email', $a['emailKey'], ['onboardingId' => $a['onboardingId']]);
+        }
+        if ($a['phoneKey'] !== '') {
+            Cslabs::writeEntity('onboardings_by_phone', $a['phoneKey'], ['onboardingId' => $a['onboardingId']]);
         }
     }
 });

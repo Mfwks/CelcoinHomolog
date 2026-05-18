@@ -1229,6 +1229,23 @@ class Cslabs
         ];
     }
 
+    public static function pixDictDuplicateError(string $key, string $account): ?array
+    {
+        if ($key === '') {
+            return null;
+        }
+        $existing = self::readEntity('pix_dict_entries', $key);
+        if (!is_array($existing) || empty($existing['key'])) {
+            return null;
+        }
+
+        $existingAccount = (string) self::arrayGet($existing, 'account.account');
+        if ($existingAccount !== '' && $existingAccount === $account) {
+            return self::pixDictCreateError('CBE189', 'Chave já cadastrada para esta conta.');
+        }
+        return self::pixDictCreateError('CBE189', 'Chave já cadastrada e em uso por outro usuário.');
+    }
+
     public static function pixDictDeleteResponse(string $key, ?array $payload = null): array
     {
         if (trim($key) === '') {
@@ -2034,6 +2051,11 @@ class Cslabs
 
         [$code, $message] = $errors[$scenario] ?? $errors['error'];
 
+        return self::onboardingErrorWith($code, $message);
+    }
+
+    private static function onboardingErrorWith(string $code, string $message): array
+    {
         return [
             'status' => 'ERROR',
             'version' => '1.0.0',
@@ -2042,6 +2064,98 @@ class Cslabs
                 'message' => $message,
             ],
         ];
+    }
+
+    public static function onboardingDuplicateError(array $payload, string $kind): ?array
+    {
+        $clientCode = trim((string) ($payload['clientCode'] ?? ''));
+        $documentNumber = self::onlyDigits((string) ($payload['documentNumber'] ?? ''));
+
+        if ($kind === 'business') {
+            $email = self::normalizeEmail((string) ($payload['businessEmail'] ?? ''));
+            $phone = self::onlyDigits((string) ($payload['contactNumber'] ?? ''));
+            $docCode = 'CBE025';
+            $docMessage = 'Já existe uma conta vinculada a este CNPJ.';
+        } else {
+            $email = self::normalizeEmail((string) ($payload['email'] ?? ''));
+            $phone = self::onlyDigits((string) ($payload['phoneNumber'] ?? ''));
+            $docCode = 'CBE022';
+            $docMessage = 'Já existe uma conta vinculada a este CPF.';
+        }
+
+        if ($documentNumber !== '' && self::readEntity('onboardings_by_document', $documentNumber) !== false) {
+            return self::onboardingErrorWith($docCode, $docMessage);
+        }
+        if ($clientCode !== '' && self::readEntity('onboardings_by_client_code', $clientCode) !== false) {
+            return self::onboardingErrorWith('CBE007', 'Conta já existe ou está bloqueada para o clientCode informado.');
+        }
+        if ($email !== '' && self::readEntity('onboardings_by_email', $email) !== false) {
+            return self::onboardingErrorWith('CBE023', 'Já existe uma conta vinculada a este e-mail.');
+        }
+        if ($phone !== '' && self::readEntity('onboardings_by_phone', $phone) !== false) {
+            return self::onboardingErrorWith('CBE024', 'Já existe uma conta vinculada a este telefone.');
+        }
+
+        return null;
+    }
+
+    private static function bulkInBatchDuplicate(
+        array $item,
+        string $kind,
+        array &$seenDocs,
+        array &$seenClientCodes,
+        array &$seenEmails,
+        array &$seenPhones
+    ): ?array {
+        $clientCode = trim((string) ($item['clientCode'] ?? ''));
+        $documentNumber = self::onlyDigits((string) ($item['documentNumber'] ?? ''));
+        $email = self::onboardingEmailKey($item, $kind);
+        $phone = self::onboardingPhoneKey($item, $kind);
+        $docCode = $kind === 'business' ? 'CBE025' : 'CBE022';
+        $docMessage = $kind === 'business'
+            ? 'Já existe uma conta vinculada a este CNPJ.'
+            : 'Já existe uma conta vinculada a este CPF.';
+
+        if ($documentNumber !== '' && isset($seenDocs[$documentNumber])) {
+            return self::onboardingErrorWith($docCode, $docMessage);
+        }
+        if ($clientCode !== '' && isset($seenClientCodes[$clientCode])) {
+            return self::onboardingErrorWith('CBE007', 'Conta já existe ou está bloqueada para o clientCode informado.');
+        }
+        if ($email !== '' && isset($seenEmails[$email])) {
+            return self::onboardingErrorWith('CBE023', 'Já existe uma conta vinculada a este e-mail.');
+        }
+        if ($phone !== '' && isset($seenPhones[$phone])) {
+            return self::onboardingErrorWith('CBE024', 'Já existe uma conta vinculada a este telefone.');
+        }
+
+        if ($documentNumber !== '') { $seenDocs[$documentNumber] = true; }
+        if ($clientCode !== '') { $seenClientCodes[$clientCode] = true; }
+        if ($email !== '') { $seenEmails[$email] = true; }
+        if ($phone !== '') { $seenPhones[$phone] = true; }
+        return null;
+    }
+
+    public static function onboardingEmailKey(array $payload, string $kind): string
+    {
+        $raw = $kind === 'business' ? ($payload['businessEmail'] ?? '') : ($payload['email'] ?? '');
+        return self::normalizeEmail((string) $raw);
+    }
+
+    public static function onboardingPhoneKey(array $payload, string $kind): string
+    {
+        $raw = $kind === 'business' ? ($payload['contactNumber'] ?? '') : ($payload['phoneNumber'] ?? '');
+        return self::onlyDigits((string) $raw);
+    }
+
+    private static function onlyDigits(string $value): string
+    {
+        return preg_replace('/\D+/', '', $value) ?? '';
+    }
+
+    private static function normalizeEmail(string $value): string
+    {
+        return strtolower(trim($value));
     }
 
     private static function chargeError(string $scenario): array
@@ -2796,6 +2910,10 @@ class Cslabs
         $results = [];
         $accepted = 0;
         $rejected = 0;
+        $seenDocs = [];
+        $seenClientCodes = [];
+        $seenEmails = [];
+        $seenPhones = [];
 
         foreach ($items as $index => $item) {
             if (!is_array($item)) {
@@ -2809,6 +2927,16 @@ class Cslabs
             }
 
             $single = self::onboardingResponse($item, $kind);
+            if (($single['status'] ?? null) !== 'ERROR') {
+                $inBatchDup = self::bulkInBatchDuplicate($item, $kind, $seenDocs, $seenClientCodes, $seenEmails, $seenPhones);
+                if ($inBatchDup === null) {
+                    $inBatchDup = self::onboardingDuplicateError($item, $kind);
+                }
+                if ($inBatchDup !== null) {
+                    $single = $inBatchDup;
+                }
+            }
+
             if (($single['status'] ?? null) === 'ERROR') {
                 $results[] = [
                     'index' => $index,

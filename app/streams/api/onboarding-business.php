@@ -33,6 +33,8 @@ if (($response['status'] ?? null) === 'ERROR') {
 $onboardingId = $response['body']['onBoardingId'];
 $clientCode = (string) ($body['clientCode'] ?? '');
 $documentNumber = (string) ($body['documentNumber'] ?? '');
+$emailKey = Cslabs::onboardingEmailKey($body, 'business');
+$phoneKey = Cslabs::onboardingPhoneKey($body, 'business');
 $account = Cslabs::generateAccountNumber($onboardingId . '|' . $documentNumber);
 
 $record = [
@@ -49,7 +51,11 @@ $record = [
     'created_at' => date(DATE_ATOM),
 ];
 
-Db::transaction(function () use ($onboardingId, $clientCode, $documentNumber, $record) {
+$duplicate = Db::transaction(function () use ($body, $onboardingId, $clientCode, $documentNumber, $emailKey, $phoneKey, $record) {
+    $dup = Cslabs::onboardingDuplicateError($body, 'business');
+    if ($dup !== null) {
+        return $dup;
+    }
     Cslabs::writeEntity('onboardings', $onboardingId, $record);
     if ($clientCode !== '') {
         Cslabs::writeEntity('onboardings_by_client_code', $clientCode, ['onboardingId' => $onboardingId]);
@@ -57,7 +63,20 @@ Db::transaction(function () use ($onboardingId, $clientCode, $documentNumber, $r
     if ($documentNumber !== '') {
         Cslabs::writeEntity('onboardings_by_document', $documentNumber, ['onboardingId' => $onboardingId]);
     }
+    if ($emailKey !== '') {
+        Cslabs::writeEntity('onboardings_by_email', $emailKey, ['onboardingId' => $onboardingId]);
+    }
+    if ($phoneKey !== '') {
+        Cslabs::writeEntity('onboardings_by_phone', $phoneKey, ['onboardingId' => $onboardingId]);
+    }
+    return null;
 });
+
+if (is_array($duplicate)) {
+    http_response_code(400);
+    echo json_encode($duplicate, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    return;
+}
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('onboarding-create');
 $webhookPayload = Cslabs::webhookEnvelope('onboarding-create', 'CONFIRMED', [

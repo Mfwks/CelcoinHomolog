@@ -84,6 +84,8 @@ Editar nesses arrays em vez de hardcodar nas views.
 - Tabela genérica `entities(client_id, type, id, entity_key, data, created_at, updated_at)` — `data` é JSON serializado, `entity_key` é o campo `entity` do payload (denormalizado para ordenar listagens sem desserializar).
 - API pública via `Cslabs::{writeEntity,readEntity,listEntities,deleteEntity}` — mesma assinatura da versão file-based anterior. Não acessar `Db::pdo()` direto a partir de streams.
 - Para writes compostos (múltiplas linhas que precisam ser atômicas — onboarding com aliases, pagamento + status, claim + history), envolver com `Db::transaction(function () { ... })`. Em exceção dentro do closure, rollback; em sucesso, commit. Chamadas aninhadas reaproveitam a transação aberta.
+- **Detecção de duplicidade em fluxos com unicidade real** (onboarding por documento/clientCode/email/telefone, criação de chave PIX): o check de duplicidade roda **dentro** da `Db::transaction`, antes dos writes. Se duplicar, o closure retorna a estrutura de erro (status `ERROR`) — o stream detecta `is_array($return)` e devolve `HTTP 400` com esse payload. Mantém check+write atômicos.
+- Códigos de erro de duplicidade usados (espelhando a tabela de erros oficial da Celcoin, `developers.celcoin.com.br/docs/tabela-de-erros-mapeados`): CBE022 (CPF), CBE025 (CNPJ), CBE023 (e-mail), CBE024 (telefone), CBE007 (clientCode), CBE189 (chave PIX). Email é normalizado por `strtolower(trim(...))` e telefone por `preg_replace('/\D+/', '', ...)` antes da comparação.
 - `Json::pretty` usa `JSON_PRESERVE_ZERO_FRACTION` para não rebaixar floats (`1000.00`) a int (`1000`) no round-trip — importante para saldos.
 
 ## Estilo

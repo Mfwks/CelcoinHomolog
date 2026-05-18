@@ -24,6 +24,7 @@ Endpoints da API Celcoin ficam em `app/streams/api/`, um arquivo por rota.
 - Respostas mockadas: métodos `Cslabs::*Response(...)` (ex.: `pixPaymentResponse`, `billPaymentAuthorizeResponse`).
 - **Persistência via Cslabs::{writeEntity,readEntity,listEntities,deleteEntity}** — escrevem na tabela `entities` do SQLite (`app/Core/Db.php`). API igual à versão file-based anterior; não há diferença visível para o stream. `listEntities` ordena por `entity_key` (campo `entity` do payload).
 - **Transações** — quando um stream faz múltiplos writes que precisam ser atômicos (ex.: onboarding + aliases por documentNumber/clientCode), envolver em `Db::transaction(fn() => ...)`. Já aplicado em onboarding, billpayment, pix payment, spb-transfer, dict-entry, kyc-fileupload, onboarding-bulk.
+- **Duplicidade real** — onboarding PF/PJ rejeita repetições de documentNumber/clientCode/email/phone com códigos `CBE022/CBE025/CBE007/CBE023/CBE024`; DICT entry rejeita chave repetida com `CBE189`. Check + write rodam dentro de `Db::transaction`; o closure retorna a estrutura de erro e o stream devolve `HTTP 400` com esse payload. Email normalizado por case+trim, telefone por dígitos apenas.
 - O prefixo `/celcoin/` em `basics.php::BASE` é **legado**. `Cslabs::boot()` faz `str_replace('/celcoin/','/',$path)` para neutralizar. Rotas em `web.php` são declaradas sem o prefixo.
 - `DEV = true` em `config.php` liga `display_errors` — é o modo padrão local.
 
