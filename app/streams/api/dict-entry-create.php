@@ -3,6 +3,7 @@
 include_once __DIR__ . '/api-stream.php';
 
 use App\Core\Cslabs;
+use App\Core\Db;
 
 header('Content-Type: application/json');
 
@@ -32,13 +33,15 @@ if (($response['status'] ?? null) === 'ERROR') {
 $key = $response['body']['key'];
 $account = $response['body']['account']['account'];
 
-Cslabs::writeEntity('pix_dict_entries', $key, [
-    'key' => $key,
-    'keyType' => $response['body']['keyType'],
-    'account' => $response['body']['account'],
-    'owner' => $response['body']['owner'],
-    'created_at' => date(DATE_ATOM),
-]);
-Cslabs::writeEntity('pix_dict_entries_by_account', $account . '_' . $response['body']['keyType'], ['key' => $key]);
+Db::transaction(function () use ($key, $account, $response) {
+    Cslabs::writeEntity('pix_dict_entries', $key, [
+        'key' => $key,
+        'keyType' => $response['body']['keyType'],
+        'account' => $response['body']['account'],
+        'owner' => $response['body']['owner'],
+        'created_at' => date(DATE_ATOM),
+    ]);
+    Cslabs::writeEntity('pix_dict_entries_by_account', $account . '_' . $response['body']['keyType'], ['key' => $key]);
+});
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

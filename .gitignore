@@ -1,6 +1,10 @@
 *.json
 *.log
 *.txt
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+tests/tmp_smoke/
 
 vendor
 

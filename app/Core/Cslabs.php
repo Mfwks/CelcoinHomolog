@@ -151,47 +151,85 @@ class Cslabs
         $clientId ??= self::context()['client_id'];
         $safeType = self::safeName($type);
         $safeId = self::safeName($entityId);
-        $directory = self::clientRoot($clientId) . '/entities/' . $safeType;
-        self::ensureDir($directory);
-        $path = $directory . '/' . $safeId . '.json';
-        Json::write($path, $data);
-        return $path;
+        $now = date(DATE_ATOM);
+        $payload = Json::pretty($data);
+        $entityKey = (string) ($data['entity'] ?? '');
+
+        $pdo = Db::pdo();
+        $stmt = $pdo->prepare('SELECT created_at FROM entities WHERE client_id = :c AND type = :t AND id = :i');
+        $stmt->execute([':c' => $clientId, ':t' => $safeType, ':i' => $safeId]);
+        $existing = $stmt->fetchColumn();
+        $createdAt = $existing !== false ? (string) $existing : $now;
+
+        $upsert = $pdo->prepare(<<<'SQL'
+            INSERT INTO entities (client_id, type, id, entity_key, data, created_at, updated_at)
+            VALUES (:c, :t, :i, :k, :d, :ca, :ua)
+            ON CONFLICT(client_id, type, id) DO UPDATE SET
+                entity_key = excluded.entity_key,
+                data = excluded.data,
+                updated_at = excluded.updated_at
+        SQL);
+        $upsert->execute([
+            ':c' => $clientId,
+            ':t' => $safeType,
+            ':i' => $safeId,
+            ':k' => $entityKey,
+            ':d' => $payload,
+            ':ca' => $createdAt,
+            ':ua' => $now,
+        ]);
+
+        return sprintf('sqlite://entities/%s/%s/%s', $clientId, $safeType, $safeId);
     }
 
     public static function readEntity(string $type, string $entityId, ?string $clientId = null): array|false
     {
         $clientId ??= self::context()['client_id'];
-        $path = self::clientRoot($clientId) . '/entities/' . self::safeName($type) . '/' . self::safeName($entityId) . '.json';
-        return Json::read($path);
+        $stmt = Db::pdo()->prepare('SELECT data FROM entities WHERE client_id = :c AND type = :t AND id = :i LIMIT 1');
+        $stmt->execute([
+            ':c' => $clientId,
+            ':t' => self::safeName($type),
+            ':i' => self::safeName($entityId),
+        ]);
+        $row = $stmt->fetchColumn();
+        if ($row === false) {
+            return false;
+        }
+        $decoded = json_decode((string) $row, true);
+        return is_array($decoded) ? $decoded : false;
+    }
+
+    public static function deleteEntity(string $type, string $entityId, ?string $clientId = null): bool
+    {
+        $clientId ??= self::context()['client_id'];
+        $stmt = Db::pdo()->prepare('DELETE FROM entities WHERE client_id = :c AND type = :t AND id = :i');
+        $stmt->execute([
+            ':c' => $clientId,
+            ':t' => self::safeName($type),
+            ':i' => self::safeName($entityId),
+        ]);
+        return $stmt->rowCount() > 0;
     }
 
     public static function listEntities(string $type, ?string $clientId = null): array
     {
         $clientId ??= self::context()['client_id'];
-        $directory = self::clientRoot($clientId) . '/entities/' . self::safeName($type);
-
-        if (!is_dir($directory)) {
-            return [];
-        }
+        $stmt = Db::pdo()->prepare(<<<'SQL'
+            SELECT data
+              FROM entities
+             WHERE client_id = :c
+               AND type = :t
+             ORDER BY entity_key
+        SQL);
+        $stmt->execute([':c' => $clientId, ':t' => self::safeName($type)]);
 
         $items = [];
-        $iterator = new \DirectoryIterator($directory);
-
-        foreach ($iterator as $file) {
-            if (!$file->isFile() || $file->getExtension() !== 'json') {
-                continue;
-            }
-
-            $data = Json::read($file->getPathname());
-
-            if (is_array($data)) {
-                $items[] = $data;
+        foreach ($stmt->fetchAll(\PDO::FETCH_COLUMN) as $raw) {
+            $decoded = json_decode((string) $raw, true);
+            if (is_array($decoded)) {
+                $items[] = $decoded;
             }
         }
-
-        usort($items, function (array $a, array $b): int {
-            return strcmp((string) ($a['entity'] ?? ''), (string) ($b['entity'] ?? ''));
-        });
 
         return $items;
     }
@@ -248,17 +286,15 @@ class Cslabs
 
         $context = self::context();
         $tokenHash = hash('sha256', $token);
-        $directory = self::storageRoot() . '/tokens';
-        self::ensureDir($directory);
 
-        Json::write($directory . '/' . $tokenHash . '.json', [
+        self::writeEntity('issued_tokens', $tokenHash, [
             'token_hash' => $tokenHash,
             'client_id' => $context['client_id'],
             'issued_at' => date(DATE_ATOM),
             'auth_hint' => substr($token, -8),
             'source' => 'v5_token',
             'meta' => $meta,
-        ]);
+        ], '__global__');
     }
 
     public static function knownWebhookEntities(): array
@@ -1771,14 +1807,7 @@ class Cslabs
 
     public static function deleteWebhookSubscription(string $entity): bool
     {
-        $clientId = self::context()['client_id'];
-        $path = self::clientRoot($clientId) . '/entities/webhook_subscriptions/' . self::safeName($entity) . '.json';
-
-        if (!is_file($path)) {
-            return false;
-        }
-
-        return unlink($path);
+        return self::deleteEntity('webhook_subscriptions', $entity);
     }
     public static function scheduleWebhook(string $event, array $payload, int $delaySeconds = 2, ?string $url = null): bool
     {
@@ -2266,8 +2295,7 @@ class Cslabs
 
     private static function resolveClientIdFromToken(string $token): ?string
     {
-        $path = self::storageRoot() . '/tokens/' . hash('sha256', $token) . '.json';
-        $tokenData = Json::read($path);
+        $tokenData = self::readEntity('issued_tokens', hash('sha256', $token), '__global__');
 
         if (!is_array($tokenData) || empty($tokenData['client_id'])) {
             return null;
@@ -2868,8 +2896,10 @@ class Cslabs
             'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
         ];
 
-        self::writeEntity('kyc_uploads', $fileId, $record);
-        self::writeEntity('kyc_uploads_by_onboarding', $onboardingId, ['fileId' => $fileId]);
+        Db::transaction(function () use ($fileId, $onboardingId, $record) {
+            self::writeEntity('kyc_uploads', $fileId, $record);
+            self::writeEntity('kyc_uploads_by_onboarding', $onboardingId, ['fileId' => $fileId]);
+        });
 
         return [
             'status' => 'SUCCESS',

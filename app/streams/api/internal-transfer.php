@@ -3,6 +3,7 @@
 include_once __DIR__ . '/api-stream.php';
 
 use App\Core\Cslabs;
+use App\Core\Db;
 
 header('Content-Type: application/json');
 
@@ -40,7 +41,9 @@ if ($amount <= 0 || $clientRequestId === '' || $debitAccount === '' || $creditAc
     return;
 }
 
-$existing = Cslabs::readEntity('internal_transfers', $clientRequestId);
+$existing = Db::transaction(function () use ($clientRequestId) {
+    return Cslabs::readEntity('internal_transfers', $clientRequestId);
+});
 
 if ($existing !== false) {
     echo json_encode($existing['response'], JSON_PRETTY_PRINT);

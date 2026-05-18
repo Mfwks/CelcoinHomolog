@@ -78,6 +78,14 @@ Editar nesses arrays em vez de hardcodar nas views.
 - Logs de request/response por interação são gerados pelo `Cslabs::finalizeInteraction` no `ob_start` decorator (`25d2cf0`).
 - Pasta `logs/` na raiz está reservada mas sem uso ativo.
 
+## Persistência (SQLite)
+
+- Estado de negócio (contas, pagamentos, chaves, claims, webhooks, etc.) vive em SQLite, arquivo único `app/tmp/cslabs/cslabs.sqlite`. Schema gerenciado por `App\Core\Db::ensureSchema()`.
+- Tabela genérica `entities(client_id, type, id, entity_key, data, created_at, updated_at)` — `data` é JSON serializado, `entity_key` é o campo `entity` do payload (denormalizado para ordenar listagens sem desserializar).
+- API pública via `Cslabs::{writeEntity,readEntity,listEntities,deleteEntity}` — mesma assinatura da versão file-based anterior. Não acessar `Db::pdo()` direto a partir de streams.
+- Para writes compostos (múltiplas linhas que precisam ser atômicas — onboarding com aliases, pagamento + status, claim + history), envolver com `Db::transaction(function () { ... })`. Em exceção dentro do closure, rollback; em sucesso, commit. Chamadas aninhadas reaproveitam a transação aberta.
+- `Json::pretty` usa `JSON_PRESERVE_ZERO_FRACTION` para não rebaixar floats (`1000.00`) a int (`1000`) no round-trip — importante para saldos.
+
 ## Estilo
 
 - Comentários PHP usam `#` para títulos de seção (`# Web`, `# Basics`) — padrão do autor, manter.

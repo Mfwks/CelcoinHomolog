@@ -3,6 +3,7 @@
 include_once __DIR__ . '/api-stream.php';
 
 use App\Core\Cslabs;
+use App\Core\Db;
 
 header('Content-Type: application/json');
 
@@ -49,13 +50,15 @@ $state = [
     'created_at' => date(DATE_ATOM),
 ];
 
-Cslabs::writeEntity('bill_payments', $id, $state);
-if ($clientRequestId !== '') {
-    Cslabs::writeEntity('bill_payments_by_client_request_id', $clientRequestId, ['id' => $id]);
-}
-if ($transactionIdAuthorize !== null) {
-    Cslabs::writeEntity('bill_payments_by_authorize', (string) $transactionIdAuthorize, ['id' => $id]);
-}
+Db::transaction(function () use ($id, $clientRequestId, $transactionIdAuthorize, $state) {
+    Cslabs::writeEntity('bill_payments', $id, $state);
+    if ($clientRequestId !== '') {
+        Cslabs::writeEntity('bill_payments_by_client_request_id', $clientRequestId, ['id' => $id]);
+    }
+    if ($transactionIdAuthorize !== null) {
+        Cslabs::writeEntity('bill_payments_by_authorize', (string) $transactionIdAuthorize, ['id' => $id]);
+    }
+});
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('billpayment');
 $webhookPayload = Cslabs::webhookEnvelope('billpayment', 'CONFIRMED', [

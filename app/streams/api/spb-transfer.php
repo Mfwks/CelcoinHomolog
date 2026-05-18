@@ -3,6 +3,7 @@
 include_once __DIR__ . '/api-stream.php';
 
 use App\Core\Cslabs;
+use App\Core\Db;
 
 header('Content-Type: application/json');
 
@@ -66,14 +67,16 @@ if (($response['status'] ?? null) === 'ERROR') {
 $id = $response['body']['id'];
 $clientCode = $response['body']['clientCode'];
 
-Cslabs::writeEntity('spb_transfers', $id, [
-    'id' => $id,
-    'status' => 'PROCESSING',
-    'body' => $response['body'],
-    'created_ts' => time(),
-    'created_at' => date(DATE_ATOM),
-]);
-Cslabs::writeEntity('spb_transfers_by_client_code', $clientCode, ['id' => $id]);
+Db::transaction(function () use ($id, $clientCode, $response) {
+    Cslabs::writeEntity('spb_transfers', $id, [
+        'id' => $id,
+        'status' => 'PROCESSING',
+        'body' => $response['body'],
+        'created_ts' => time(),
+        'created_at' => date(DATE_ATOM),
+    ]);
+    Cslabs::writeEntity('spb_transfers_by_client_code', $clientCode, ['id' => $id]);
+});
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('spb-transfer-out');
 Cslabs::scheduleWebhook(

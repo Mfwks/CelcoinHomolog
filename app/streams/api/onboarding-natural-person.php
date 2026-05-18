@@ -3,6 +3,7 @@
 include_once __DIR__ . '/api-stream.php';
 
 use App\Core\Cslabs;
+use App\Core\Db;
 
 header('Content-Type: application/json');
 
@@ -48,13 +49,15 @@ $record = [
     'created_at' => date(DATE_ATOM),
 ];
 
-Cslabs::writeEntity('onboardings', $onboardingId, $record);
-if ($clientCode !== '') {
-    Cslabs::writeEntity('onboardings_by_client_code', $clientCode, ['onboardingId' => $onboardingId]);
-}
-if ($documentNumber !== '') {
-    Cslabs::writeEntity('onboardings_by_document', $documentNumber, ['onboardingId' => $onboardingId]);
-}
+Db::transaction(function () use ($onboardingId, $clientCode, $documentNumber, $record) {
+    Cslabs::writeEntity('onboardings', $onboardingId, $record);
+    if ($clientCode !== '') {
+        Cslabs::writeEntity('onboardings_by_client_code', $clientCode, ['onboardingId' => $onboardingId]);
+    }
+    if ($documentNumber !== '') {
+        Cslabs::writeEntity('onboardings_by_document', $documentNumber, ['onboardingId' => $onboardingId]);
+    }
+});
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('onboarding-create');
 $webhookPayload = Cslabs::webhookEnvelope('onboarding-create', 'CONFIRMED', [

@@ -5,7 +5,7 @@ namespace App\Core;
 class Json
 {
 	public static function pretty($in){
-		return json_encode($in, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		return json_encode($in, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
 	}
 
 	public static function read($file){
