@@ -513,6 +513,12 @@ class Cslabs
         }
 
         $digits = preg_replace('/\D+/', '', $digitable) ?: $digitable;
+
+        $ownCharge = self::chargeRecordByDigits($digits);
+        if (is_array($ownCharge)) {
+            return self::billPaymentAuthorizeFromCharge($ownCharge, $digitable, $type);
+        }
+
         $seed = hash('sha256', $digits);
         $isUtilityBill = str_starts_with($digits, '8') || $type === 1;
         $value = self::billPaymentValue($digits, $seed);
@@ -1548,6 +1554,180 @@ class Cslabs
             substr($digits, 32, 1),
             substr($digits, 33, 14)
         );
+    }
+
+    public static function chargeRecordByDigits(string $digits): ?array
+    {
+        if ($digits === '') {
+            return null;
+        }
+        $alias = self::readEntity('charges_by_bank_line', $digits);
+        if (!is_array($alias)) {
+            $alias = self::readEntity('charges_by_bar_code', $digits);
+        }
+        if (!is_array($alias) || empty($alias['transactionId'])) {
+            return null;
+        }
+        $record = self::readEntity('charges', $alias['transactionId']);
+        return is_array($record) ? $record : null;
+    }
+
+    public static function billPaymentAuthorizeFromCharge(array $charge, string $digitable, int $type): array
+    {
+        $amount = round((float) ($charge['amount'] ?? 0), 2);
+        $dueDate = (string) ($charge['duedate'] ?? date('Y-m-d'));
+        $dueIso = preg_match('/^\d{4}-\d{2}-\d{2}/', $dueDate)
+            ? substr($dueDate, 0, 10) . 'T00:00:00.0000000'
+            : date('Y-m-d') . 'T00:00:00.0000000';
+        $settleDate = date('d/m/Y', strtotime('+1 weekday'));
+        $debtorName = (string) self::arrayGet($charge, 'debtor.name');
+        $debtorDoc = (string) self::arrayGet($charge, 'debtor.document');
+        $assignor = 'CELCOIN INSTITUIÇÃO DE PAGAMENTO - SA';
+        $registerData = [
+            'identificationField' => $digitable,
+            'recipient' => [
+                'name' => (string) self::arrayGet($charge, 'receiver.name') ?: $assignor,
+                'documentType' => 2,
+                'document' => (string) self::arrayGet($charge, 'receiver.document'),
+            ],
+            'payer' => [
+                'name' => $debtorName,
+                'documentType' => strlen(preg_replace('/\D+/', '', $debtorDoc)) === 14 ? 2 : 1,
+                'document' => $debtorDoc,
+            ],
+            'allowChangeValue' => false,
+            'totalUpdated' => $amount,
+            'originalValue' => $amount,
+            'discountValue' => 0,
+            'rebateValue' => 0,
+            'fineValue' => 0,
+            'interestValue' => 0,
+            'dueDate' => $dueIso . 'Z',
+            'nextSettle' => 'N',
+        ];
+
+        return [
+            'assignor' => $assignor,
+            'registerData' => $registerData,
+            'settleDate' => $settleDate,
+            'dueDate' => $dueIso . 'Z',
+            'endHour' => '23:00',
+            'initeHour' => '07:00',
+            'nextSettle' => 'N',
+            'digitable' => $digitable,
+            'transactionId' => (string) ($charge['transactionId'] ?? ''),
+            'type' => $type ?: 2,
+            'value' => $amount,
+            'maxValue' => null,
+            'minValue' => null,
+            'errorCode' => '000',
+            'message' => null,
+            'status' => 0,
+        ];
+    }
+
+    public static function boletoBarCode(string $transactionId, float $amount, string $dueDate): string
+    {
+        $seed = hash('sha256', $transactionId . '|' . $amount . '|' . $dueDate . '|barcode');
+        $digits = '';
+        $len = strlen($seed);
+        for ($i = 0; $i < $len && strlen($digits) < 44; $i++) {
+            $char = $seed[$i];
+            $digits .= ctype_digit($char) ? $char : (string) (ord($char) % 10);
+        }
+        return $digits;
+    }
+
+    public static function boletoBankLineDigits(string $bankLine): string
+    {
+        return (string) preg_replace('/\D+/', '', $bankLine);
+    }
+
+    public static function chargeFetchResponse(?string $transactionId, ?string $externalId): array
+    {
+        $record = false;
+
+        if ($transactionId !== null && $transactionId !== '') {
+            $record = self::readEntity('charges', $transactionId);
+        }
+
+        if (!is_array($record) && $externalId !== null && $externalId !== '') {
+            $alias = self::readEntity('charges_by_external_id', $externalId);
+            if (is_array($alias) && !empty($alias['transactionId'])) {
+                $record = self::readEntity('charges', $alias['transactionId']);
+            }
+        }
+
+        if (!is_array($record)) {
+            return [
+                'version' => '1.0.0',
+                'status' => 'ERROR',
+                'error' => [
+                    'errorCode' => 'CIE999',
+                    'message' => 'Cobrança não encontrada.',
+                ],
+            ];
+        }
+
+        return [
+            'version' => '1.0.0',
+            'status' => 'SUCCESS',
+            'body' => self::chargeFetchBody($record),
+        ];
+    }
+
+    public static function chargeFetchBody(array $record): array
+    {
+        $amount = round((float) ($record['amount'] ?? 0), 2);
+        $status = (string) ($record['status'] ?? 'PENDING');
+        $dueDate = (string) ($record['duedate'] ?? '');
+        $bankLine = (string) ($record['bankLine'] ?? '');
+        $barCode = (string) ($record['barCode'] ?? '');
+        $bankAccount = (string) self::arrayGet($record, 'receiver.account');
+        $txid = (string) ($record['transactionId'] ?? '');
+
+        $boletoStatusLabel = match (strtoupper($status)) {
+            'PAID', 'CONFIRMED' => 'Pago',
+            'CANCELLED', 'CANCELED' => 'Cancelado',
+            default => 'Registrado',
+        };
+
+        $pixStatusLabel = match (strtoupper($status)) {
+            'PAID', 'CONFIRMED' => 'Pago',
+            'CANCELLED', 'CANCELED' => 'Cancelado',
+            default => 'Ativa',
+        };
+
+        return [
+            'transactionId' => $txid,
+            'externalId' => (string) ($record['externalId'] ?? ''),
+            'amount' => $amount,
+            'amountConfirmed' => isset($record['amountConfirmed']) ? round((float) $record['amountConfirmed'], 2) : null,
+            'duedate' => $dueDate,
+            'status' => $status,
+            'debtor' => $record['debtor'] ?? null,
+            'receiver' => $record['receiver'] ?? null,
+            'instructions' => $record['instructions'] ?? null,
+            'boleto' => [
+                'transactionId' => (string) ($record['boleto']['transactionId'] ?? substr($txid, 0, 9)),
+                'status' => $boletoStatusLabel,
+                'bankEmissor' => 'itauAgreement',
+                'bankNumber' => (string) ($record['boleto']['bankNumber'] ?? substr($txid, 0, 9)),
+                'bankAgency' => '0001',
+                'bankAccount' => $bankAccount,
+                'barCode' => $barCode,
+                'bankLine' => $bankLine,
+                'bankAssignor' => 'CELCOIN INSTITUIÇÃO DE PAGAMENTO - SA',
+            ],
+            'pix' => [
+                'transactionId' => (string) ($record['pix']['transactionId'] ?? substr($txid, 0, 9)),
+                'transactionIdentification' => (string) ($record['pix']['transactionIdentification'] ?? substr(str_replace('-', '', $txid), 0, 30)),
+                'status' => $pixStatusLabel,
+                'key' => (string) ($record['key'] ?? ''),
+                'emv' => (string) ($record['pix']['emv'] ?? ''),
+            ],
+            'split' => $record['split'] ?? null,
+        ];
     }
 
     public static function billPaymentStatusRender(array $state, bool $confirmed): array

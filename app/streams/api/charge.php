@@ -3,6 +3,7 @@
 include_once __DIR__ . '/api-stream.php';
 
 use App\Core\Cslabs;
+use App\Core\Db;
 
 header('Content-Type: application/json');
 
@@ -32,26 +33,40 @@ if (($response['status'] ?? null) !== 'SUCCESS') {
 $transactionId = $response['body']['transactionId'];
 $externalId = (string) ($body['externalId'] ?? '');
 $amount = round((float) ($body['amount'] ?? 0), 2);
+$dueDate = (string) ($body['duedate'] ?? '');
 $receiverAccount = (string) ($body['receiver']['account'] ?? '');
-$bankLine = Cslabs::boletoBankLine($transactionId, $amount, (string) ($body['duedate'] ?? ''));
+$bankLine = Cslabs::boletoBankLine($transactionId, $amount, $dueDate);
+$bankLineDigits = Cslabs::boletoBankLineDigits($bankLine);
+$barCode = Cslabs::boletoBarCode($transactionId, $amount, $dueDate);
 
 $charge = [
     'transactionId' => $transactionId,
     'externalId' => $externalId,
     'amount' => $amount,
-    'duedate' => (string) ($body['duedate'] ?? ''),
+    'duedate' => $dueDate,
     'key' => (string) ($body['key'] ?? ''),
     'debtor' => $body['debtor'] ?? null,
     'receiver' => $body['receiver'] ?? null,
+    'instructions' => $body['instructions'] ?? null,
+    'split' => $body['split'] ?? null,
     'bankLine' => $bankLine,
+    'barCode' => $barCode,
     'status' => 'PENDING',
     'created_at' => date(DATE_ATOM),
 ];
 
-Cslabs::writeEntity('charges', $transactionId, $charge);
-if ($externalId !== '') {
-    Cslabs::writeEntity('charges_by_external_id', $externalId, ['transactionId' => $transactionId]);
-}
+Db::transaction(function () use ($transactionId, $externalId, $bankLineDigits, $barCode, $charge) {
+    Cslabs::writeEntity('charges', $transactionId, $charge);
+    if ($externalId !== '') {
+        Cslabs::writeEntity('charges_by_external_id', $externalId, ['transactionId' => $transactionId]);
+    }
+    if ($bankLineDigits !== '') {
+        Cslabs::writeEntity('charges_by_bank_line', $bankLineDigits, ['transactionId' => $transactionId]);
+    }
+    if ($barCode !== '') {
+        Cslabs::writeEntity('charges_by_bar_code', $barCode, ['transactionId' => $transactionId]);
+    }
+});
 
 $webhookUrl = Cslabs::webhookSubscriptionUrl('charge-create');
 $webhookPayload = Cslabs::webhookEnvelope('charge-create', 'PENDING', [
@@ -61,7 +76,7 @@ $webhookPayload = Cslabs::webhookEnvelope('charge-create', 'PENDING', [
         'status' => 'PENDING',
         'bankLine' => $bankLine,
         'bankNumber' => substr($transactionId, 0, 9),
-        'barCode' => null,
+        'barCode' => $barCode,
         'bankEmissor' => 'itauAgreement',
         'bankAgency' => '0001',
         'bankAccount' => $receiverAccount,

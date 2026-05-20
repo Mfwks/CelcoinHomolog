@@ -42,7 +42,7 @@ O microframework não restringe método HTTP no roteador; o método aceito é de
 | GET     | `/pix/v1/collection/{immediate,duedate}/payload/{url}`                               | `api/collection-payload`     | Consulta payload da cobrança              |
 | POST    | `/baas-onboarding/v1/account/natural-person/create`                                  | `api/onboarding-natural-person` | Criação de conta PF                    |
 | POST    | `/baas-onboarding/v1/account/business/create`                                        | `api/onboarding-business`    | Criação de conta PJ                       |
-| GET     | `/baas-onboarding/v1/account/check`                                                  | `api/account-status`         | Verificação de status da conta            |
+| GET     | `/baas-onboarding/v1/account/check`                                                  | `api/account-status`         | Verificação de status da conta — devolve `body.account.{branch,account,name,documentNumber}` quando CONFIRMED |
 | GET     | `/baas-accountmanager/v1/account/fetch`                                              | `api/account`                | Busca de dados da conta                   |
 | PUT     | `/baas-accountmanager/v1/account/status`                                             | `api/account-status-update`  | Ativar/bloquear conta                     |
 | PUT     | `/baas-accountmanager/v1/account/natural-person`                                     | `api/account-update-natural-person` | Atualizar dados PF                  |
@@ -60,6 +60,7 @@ O microframework não restringe método HTTP no roteador; o método aceito é de
 | POST    | `/pix/v1/brcode/static`                                                              | `api/brcode-static`          | Criar QR estático                         |
 | POST    | `/pix/v1/brcode/dynamic`, `/pix/v1/collection/immediate`                             | `api/brcode-dynamic`         | Criar QR dinâmico                         |
 | GET     | `/pix/v1/location/{locationId}/base64`                                               | `api/location-base64`        | Imagem da location                        |
+| GET     | `/baas/v2/charge`                                                                    | `api/charge-fetch`           | Consultar boleto emitido por `TransactionId`/`ExternalId` |
 | DELETE  | `/baas/v2/charge/{txid}`                                                             | `api/charge-cancel`          | Cancelar cobrança                         |
 | PUT     | `/baas-accountmanager/v1/account/business`                                           | `api/account-update-business`| Atualizar dados PJ                        |
 | DELETE  | `/baas-accountmanager/v1/account/close`                                              | `api/account-close`          | Encerrar conta                            |

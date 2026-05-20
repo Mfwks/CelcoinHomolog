@@ -56,6 +56,7 @@ $web->add('/pix/v1/collection/immediate','api/brcode-dynamic'); // mesmo retorno
 $web->add('/pix/v1/location/{locationId}/base64','api/location-base64');
 
 # Charge cancel
+$web->add('/baas/v2/charge','api/charge-fetch'); // GET com TransactionId/ExternalId em query
 $web->add('/baas/v2/charge/{txid}','api/charge-cancel');
 
 # AccountManager extras
@@ -71,6 +72,7 @@ $web->add('/api-integration-baas-webservice/v1/charge','api/charge'); // emissao
 $web->add('/pix/v1/dict/v2/key','api/key-old'); // consultarChaveAntigo :: /pix/v1/dict/v2/key
 $web->add('/pix/v1/payment','api/payment'); // enviarPix :: /pix/v1/payment
 $web->add('/baas-wallet-transactions-webservice/v1/pix/payment','api/payment-baas'); // enviarPix :: baas-wallet-transactions-webservice/v1/pix/payment
+$web->add('/baas/v2/pix/payment','api/payment-baas'); // alias v2 canônico (developers.celcoin.com.br/reference/realizar-transferência-pix)
 $web->add('/baas-wallet-transactions-webservice/v1/wallet/internal/transfer','api/internal-transfer');
 $web->add('/baas-wallet-transactions-webservice/v1/wallet/internal/transfer/status','api/internal-transfer-status');
 $web->add('/baas-wallet-transactions-webservice/v1/spb/transfer','api/spb-transfer');
