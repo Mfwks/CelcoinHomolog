@@ -323,11 +323,12 @@ function prettyPanel(mixed $value): string
                             $query = http_build_query(['request' => $requestId]);
                         ?>
                         <a class="item<?= $active ? ' active' : '' ?>" href="?<?= $query ?>">
-                            <strong><?= htmlspecialchars($requestId) ?></strong>
-                            <span><?= htmlspecialchars(($item['method'] ?? 'GET') . ' ' . ($item['path'] ?? '/')) ?></span>
+                            <strong><?= htmlspecialchars(
+                                ($item['method'] ?? 'GET')
+                                . ' ' . ((string) ($item['response']['status_code'] ?? '0'))
+                                . ' ' . ($item['path'] ?? '/')
+                            ) ?></strong>
                             <span><?= htmlspecialchars($item['received_at'] ?? 'sem horário') ?></span>
-                            <span>worker: <?= htmlspecialchars($item['worker_id'] ?? 'desconhecido') ?></span>
-                            <span>status: <?= htmlspecialchars((string) ($item['response']['status_code'] ?? '0')) ?></span>
                         </a>
                     <?php endforeach; ?>
                 </div>
