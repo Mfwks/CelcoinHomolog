@@ -38,6 +38,7 @@ $receiverAccount = (string) ($body['receiver']['account'] ?? '');
 $bankLine = Cslabs::boletoBankLine($transactionId, $amount, $dueDate);
 $bankLineDigits = Cslabs::boletoBankLineDigits($bankLine);
 $barCode = Cslabs::boletoBarCode($transactionId, $amount, $dueDate);
+$boletoIds = Cslabs::chargeBoletoIds($transactionId);
 
 $charge = [
     'transactionId' => $transactionId,
@@ -51,6 +52,10 @@ $charge = [
     'split' => $body['split'] ?? null,
     'bankLine' => $bankLine,
     'barCode' => $barCode,
+    'boleto' => [
+        'transactionId' => $boletoIds['transactionId'],
+        'bankNumber'    => $boletoIds['bankNumber'],
+    ],
     'status' => 'PENDING',
     'created_at' => date(DATE_ATOM),
 ];
@@ -72,10 +77,10 @@ $webhookUrl = Cslabs::webhookSubscriptionUrl('charge-create');
 $webhookPayload = Cslabs::webhookEnvelope('charge-create', 'PENDING', [
     'amount' => $amount,
     'boleto' => [
-        'transactionId' => (string) random_int(100000, 999999),
+        'transactionId' => $boletoIds['transactionId'],
         'status' => 'PENDING',
         'bankLine' => $bankLine,
-        'bankNumber' => substr($transactionId, 0, 9),
+        'bankNumber' => $boletoIds['bankNumber'],
         'barCode' => $barCode,
         'bankEmissor' => 'itauAgreement',
         'bankAgency' => '0001',

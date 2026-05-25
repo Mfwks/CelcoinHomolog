@@ -35,11 +35,14 @@ if ($method === 'GET') {
         $items = array_values(array_filter($items, fn ($item) => (bool) ($item['active'] ?? true) === $active));
     }
 
+    $subscriptions = array_map(fn ($r) => Cslabs::webhookSubscriptionView($r), $items);
+
     echo json_encode([
-        'status' => 'OK',
-        'items' => $items,
-        'known_entities' => Cslabs::knownWebhookEntities(),
-        'count' => count($items),
+        'body' => [
+            'subscriptions' => $subscriptions,
+        ],
+        'status'  => 'SUCCESS',
+        'version' => '1.0.0',
     ], JSON_PRETTY_PRINT);
     return;
 }
@@ -62,9 +65,13 @@ if ($method === 'DELETE') {
     Cslabs::deleteWebhookSubscription($entity);
 
     echo json_encode([
-        'status' => 'OK',
-        'message' => 'Webhook removido com sucesso.',
-        'entity' => $entity,
+        'version' => '1.0.0',
+        'status' => 'SUCCESS',
+        'body' => [
+            'subscriptionId' => $existed['subscriptionId'] ?? null,
+            'entity' => $entity,
+            'message' => 'Webhook removido com sucesso.',
+        ],
     ], JSON_PRETTY_PRINT);
     return;
 }
@@ -99,13 +106,16 @@ if ($url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
 $record = Cslabs::saveWebhookSubscription($entity, $url, $auth, $body, $active);
 
 echo json_encode([
-    'status' => 'OK',
-    'message' => 'Webhook salvo com sucesso.',
-    'entity' => $record['entity'],
-    'webhookUrl' => $record['webhookUrl'],
-    'auth' => $record['auth'],
-    'knownEntity' => $record['known_entity'],
-    'active' => $record['active'],
-    'createdAt' => $record['created_at'],
-    'updatedAt' => $record['updated_at'],
+    'version' => '1.0.0',
+    'status' => 'SUCCESS',
+    'body' => [
+        'subscriptionId' => $record['subscriptionId'],
+        'entity' => $record['entity'],
+        'webhookUrl' => $record['webhookUrl'],
+        'auth' => $record['auth'],
+        'active' => $record['active'],
+        'knownEntity' => $record['known_entity'],
+        'createDate' => $record['created_at'],
+        'lastUpdateDate' => $record['updated_at'],
+    ],
 ], JSON_PRETTY_PRINT);

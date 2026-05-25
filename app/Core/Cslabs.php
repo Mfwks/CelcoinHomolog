@@ -30,6 +30,7 @@ class Cslabs
         error_log($path);
         $path = str_replace('/celcoin/','/',$path);
         error_log($path);
+        $receivedAtMicro = microtime(true);
         self::$context = [
             'request_id' => $requestId,
             'client_id' => $clientId,
@@ -42,14 +43,12 @@ class Cslabs
             'path' => $path,
             'query' => $_GET,
             'headers' => self::sanitizeHeaders($headers),
-            'received_at' => date(DATE_ATOM),
+            'received_at' => date(DATE_ATOM, (int) $receivedAtMicro),
+            'received_at_us' => $receivedAtMicro,
             'raw_body' => $rawBody,
             'body' => $body,
-            'storage_root' => self::storageRoot(),
             'meta' => $meta,
         ];
-
-        self::ensureDir(self::clientRoot($clientId));
 
         return self::$context;
     }
@@ -104,6 +103,7 @@ class Cslabs
     public static function finalizeInteraction(string $responseBody): void
     {
         $context = self::context();
+        $statusCode = http_response_code() ?: 200;
         $payload = [
             'request_id' => $context['request_id'],
             'client_id' => $context['client_id'],
@@ -111,6 +111,7 @@ class Cslabs
             'auth_hint' => $context['auth_hint'],
             'identity_source' => $context['identity_source'],
             'received_at' => $context['received_at'],
+            'received_at_us' => $context['received_at_us'] ?? null,
             'method' => $context['method'],
             'path' => $context['path'],
             'ip' => $context['ip'],
@@ -118,7 +119,7 @@ class Cslabs
             'headers' => $context['headers'],
             'request' => $context['body'],
             'response' => [
-                'status_code' => http_response_code() ?: 200,
+                'status_code' => $statusCode,
                 'headers' => headers_list(),
                 'body' => self::decodePayload($responseBody),
             ],
@@ -128,20 +129,40 @@ class Cslabs
             ],
         ];
 
-        $day = date('Ymd');
-        $directory = self::clientRoot($context['client_id']) . '/interactions/' . $day;
-        self::ensureDir($directory);
-        Json::write($directory . '/' . $context['request_id'] . '.json', $payload);
-
-        $indexDir = self::clientRoot($context['client_id']) . '/indexes/workers';
-        self::ensureDir($indexDir);
-        Json::write($indexDir . '/' . $context['worker_id'] . '.json', [
-            'worker_id' => $context['worker_id'],
-            'client_id' => $context['client_id'],
-            'ip' => $context['ip'],
-            'last_seen_at' => $context['received_at'],
-            'auth_hint' => $context['auth_hint'],
+        $pdo = Db::pdo();
+        $stmt = $pdo->prepare(<<<'SQL'
+            INSERT INTO interactions
+                (client_id, request_id, received_at, received_at_us, worker_id, method, path, status_code, data)
+            VALUES
+                (:c, :r, :ra, :ru, :w, :m, :p, :s, :d)
+            ON CONFLICT(client_id, request_id) DO UPDATE SET
+                received_at    = excluded.received_at,
+                received_at_us = excluded.received_at_us,
+                worker_id      = excluded.worker_id,
+                method         = excluded.method,
+                path           = excluded.path,
+                status_code    = excluded.status_code,
+                data           = excluded.data
+        SQL);
+        $stmt->execute([
+            ':c'  => $context['client_id'],
+            ':r'  => $context['request_id'],
+            ':ra' => $context['received_at'],
+            ':ru' => $context['received_at_us'],
+            ':w'  => $context['worker_id'],
+            ':m'  => $context['method'],
+            ':p'  => $context['path'],
+            ':s'  => $statusCode,
+            ':d'  => Json::pretty($payload),
         ]);
+
+        self::upsertWorker(
+            $context['client_id'],
+            $context['worker_id'],
+            $context['ip'],
+            $context['auth_hint'],
+            $context['received_at']
+        );
 
         self::touchWorkerOrigin($context['client_id'], $context['ip'], $context['worker_id'], $context['headers']);
     }
@@ -211,6 +232,34 @@ class Cslabs
         return $stmt->rowCount() > 0;
     }
 
+    public static function purgeClient(string $clientId): array
+    {
+        if ($clientId === '' || $clientId === '__global__') {
+            return ['deleted' => [], 'client_id' => $clientId, 'ok' => false];
+        }
+
+        return Db::transaction(function (\PDO $pdo) use ($clientId): array {
+            $deleted = [];
+
+            foreach (['entities', 'interactions', 'client_workers', 'client_origins', 'webhook_dispatches'] as $table) {
+                $stmt = $pdo->prepare("DELETE FROM {$table} WHERE client_id = :c");
+                $stmt->execute([':c' => $clientId]);
+                $deleted[$table] = $stmt->rowCount();
+            }
+
+            $tokens = $pdo->prepare(<<<'SQL'
+                DELETE FROM entities
+                WHERE client_id = '__global__'
+                  AND type = 'issued_tokens'
+                  AND json_extract(data, '$.client_id') = :c
+            SQL);
+            $tokens->execute([':c' => $clientId]);
+            $deleted['issued_tokens'] = $tokens->rowCount();
+
+            return ['deleted' => $deleted, 'client_id' => $clientId, 'ok' => true];
+        });
+    }
+
     public static function listEntities(string $type, ?string $clientId = null): array
     {
         $clientId ??= self::context()['client_id'];
@@ -236,45 +285,33 @@ class Cslabs
 
     public static function listInteractions(string $clientId): array
     {
-        $base = self::clientRoot($clientId) . '/interactions';
-        if (!is_dir($base)) {
-            return [];
-        }
+        $stmt = Db::pdo()->prepare(<<<'SQL'
+            SELECT data FROM interactions
+            WHERE client_id = :c
+            ORDER BY received_at_us DESC, request_id DESC
+        SQL);
+        $stmt->execute([':c' => $clientId]);
 
         $items = [];
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS)
-        );
-
-        foreach ($iterator as $file) {
-            if (!$file->isFile() || $file->getExtension() !== 'json') {
-                continue;
+        foreach ($stmt->fetchAll(\PDO::FETCH_COLUMN) as $raw) {
+            $decoded = json_decode((string) $raw, true);
+            if (is_array($decoded)) {
+                $items[] = $decoded;
             }
-
-            $data = Json::read($file->getPathname());
-            if (!$data) {
-                continue;
-            }
-
-            $items[] = $data;
         }
-
-        usort($items, function (array $a, array $b): int {
-            return strcmp($b['received_at'] ?? '', $a['received_at'] ?? '');
-        });
-
         return $items;
     }
 
     public static function findInteraction(string $clientId, string $requestId): array|false
     {
-        foreach (self::listInteractions($clientId) as $item) {
-            if (($item['request_id'] ?? null) === $requestId) {
-                return $item;
-            }
+        $stmt = Db::pdo()->prepare('SELECT data FROM interactions WHERE client_id = :c AND request_id = :r LIMIT 1');
+        $stmt->execute([':c' => $clientId, ':r' => $requestId]);
+        $raw = $stmt->fetchColumn();
+        if ($raw === false) {
+            return false;
         }
-
-        return false;
+        $decoded = json_decode((string) $raw, true);
+        return is_array($decoded) ? $decoded : false;
     }
 
     public static function registerIssuedToken(string $token, array $meta = []): void
@@ -1541,19 +1578,10 @@ class Cslabs
             }
         }
 
-        $digits = str_pad($digits, 47, '0');
-
-        return sprintf(
-            '%s.%s %s.%s %s.%s %s %s',
-            substr($digits, 0, 5),
-            substr($digits, 5, 5),
-            substr($digits, 10, 5),
-            substr($digits, 15, 6),
-            substr($digits, 21, 5),
-            substr($digits, 26, 6),
-            substr($digits, 32, 1),
-            substr($digits, 33, 14)
-        );
+        # Celcoin emite a linha digitável com 47 dígitos puros (sem máscara) no
+        # webhook e no GET fetch — a máscara fica por conta da renderização do
+        # boleto, não do payload. Ref.: developers.celcoin.com.br/docs/criar-uma-cobranca-avulsa.
+        return str_pad($digits, 47, '0');
     }
 
     public static function chargeRecordByDigits(string $digits): ?array
@@ -1709,10 +1737,10 @@ class Cslabs
             'receiver' => $record['receiver'] ?? null,
             'instructions' => $record['instructions'] ?? null,
             'boleto' => [
-                'transactionId' => (string) ($record['boleto']['transactionId'] ?? substr($txid, 0, 9)),
+                'transactionId' => (string) ($record['boleto']['transactionId'] ?? self::chargeBoletoIds($txid)['transactionId']),
                 'status' => $boletoStatusLabel,
                 'bankEmissor' => 'itauAgreement',
-                'bankNumber' => (string) ($record['boleto']['bankNumber'] ?? substr($txid, 0, 9)),
+                'bankNumber' => (string) ($record['boleto']['bankNumber'] ?? self::chargeBoletoIds($txid)['bankNumber']),
                 'bankAgency' => '0001',
                 'bankAccount' => $bankAccount,
                 'barCode' => $barCode,
@@ -1760,7 +1788,15 @@ class Cslabs
 
     public static function listWebhookSubscriptions(): array
     {
-        return self::listEntities('webhook_subscriptions');
+        $items = self::listEntities('webhook_subscriptions');
+        foreach ($items as $i => $item) {
+            if (empty($item['subscriptionId'])) {
+                $item['subscriptionId'] = gerarHashMock();
+                self::writeEntity('webhook_subscriptions', $item['entity'], $item);
+                $items[$i] = $item;
+            }
+        }
+        return $items;
     }
 
     public static function webhookSubscriptionUrl(string $entity): ?string
@@ -1771,12 +1807,71 @@ class Cslabs
         return filter_var($url, FILTER_VALIDATE_URL) ? $url : null;
     }
 
+    /**
+     * IDs determinísticos do boleto derivados do transactionId da charge.
+     * Garante que o mesmo boleto sempre exibe o mesmo `boleto.transactionId`
+     * (6 dígitos numéricos) e `boleto.bankNumber` (9 dígitos numéricos) em
+     * webhook + GET fetch, alinhado ao formato real do `itauAgreement`.
+     */
+    public static function chargeBoletoIds(string $transactionId): array
+    {
+        $seed = $transactionId !== '' ? $transactionId : gerarHashMock();
+
+        return [
+            'transactionId' => (string) (hexdec(substr(hash('sha256', $seed . '|boleto-txn'), 0, 8)) % 900000 + 100000),
+            'bankNumber'    => (string) (hexdec(substr(hash('sha256', $seed . '|boleto-bank'), 0, 12)) % 900000000 + 100000000),
+        ];
+    }
+
+    /**
+     * Projeta um registro interno de inscrição no shape oficial da Celcoin
+     * (`GET /baas-webhookmanager/v1/webhook/subscription`).
+     */
+    public static function webhookSubscriptionView(array $record): array
+    {
+        $entity = (string) ($record['entity'] ?? '');
+        $subscriptionId = (string) ($record['subscriptionId'] ?? '');
+        if ($subscriptionId === '') {
+            $subscriptionId = substr(hash('sha256', $entity), 0, 24);
+        }
+        $auth = is_array($record['auth'] ?? null) ? $record['auth'] : [];
+
+        return [
+            'subscriptionId' => $subscriptionId,
+            'entity'         => $entity,
+            'webhookUrl'     => (string) ($record['webhookUrl'] ?? ''),
+            'active'         => (bool) ($record['active'] ?? true),
+            'createDate'     => self::formatCelcoinIsoZ((string) ($record['created_at'] ?? '')),
+            'lastUpdateDate' => self::formatCelcoinIsoZ((string) ($record['updated_at'] ?? '')),
+            'auth' => [
+                'login' => (string) ($auth['login'] ?? ''),
+                'pwd'   => (string) ($auth['pwd'] ?? $auth['password'] ?? ''),
+                'type'  => (string) ($auth['type'] ?? ''),
+            ],
+        ];
+    }
+
+    private static function formatCelcoinIsoZ(string $iso): string
+    {
+        if ($iso === '') {
+            return '';
+        }
+        try {
+            return (new \DateTimeImmutable($iso))
+                ->setTimezone(new \DateTimeZone('UTC'))
+                ->format('Y-m-d\TH:i:s.v\Z');
+        } catch (\Exception $e) {
+            return $iso;
+        }
+    }
+
     public static function saveWebhookSubscription(string $entity, string $url, ?array $auth = null, array $raw = [], bool $active = true): array
     {
         $existing = self::webhookSubscription($entity);
         $now = date(DATE_ATOM);
         $knownEntities = self::knownWebhookEntities();
         $record = [
+            'subscriptionId' => is_array($existing) ? ($existing['subscriptionId'] ?? gerarHashMock()) : gerarHashMock(),
             'entity' => $entity,
             'webhookUrl' => $url,
             'auth' => $auth,
@@ -1908,10 +2003,10 @@ class Cslabs
             ] : [
                 'amount' => 2256.27,
                 'boleto' => [
-                    'transactionId' => (string) random_int(100000, 999999),
+                    'transactionId' => self::chargeBoletoIds($id)['transactionId'],
                     'status' => $status === 'CONFIRMED' ? 'PAID' : 'PENDING',
                     'bankLine' => self::boletoBankLine($id, 2256.27, date('Y-m-d')),
-                    'bankNumber' => substr($id, 0, 9),
+                    'bankNumber' => self::chargeBoletoIds($id)['bankNumber'],
                     'barCode' => '34197978000002256271098014789950910156496000',
                     'bankEmissor' => 'itauAgreement',
                     'bankAgency' => '0910',
@@ -2031,33 +2126,110 @@ class Cslabs
             'delay_seconds' => $delaySeconds,
         ]);
 
-        register_shutdown_function(function () use ($url, $payload, $event, $requestId, $clientId, $webhookId, $delaySeconds, $auth): void {
+        $dispatch = [
+            'webhook_id'    => $webhookId,
+            'request_id'    => $requestId,
+            'client_id'     => $clientId,
+            'event'         => $event,
+            'url'           => $url,
+            'payload'       => $payload,
+            'auth'          => $auth,
+            'delay_seconds' => $delaySeconds,
+        ];
+
+        if (self::spawnWebhookWorker($dispatch)) {
+            return true;
+        }
+
+        # Fallback se exec() estiver indisponível: dispatch in-process via shutdown.
+        # Em SAPIs sem fastcgi_finish_request a entrega vai bloquear a resposta —
+        # mas pelo menos ainda acontece.
+        register_shutdown_function(static function () use ($dispatch): void {
             if (function_exists('fastcgi_finish_request')) {
                 fastcgi_finish_request();
             }
-
-            sleep(max(0, $delaySeconds));
-            $sentAt = date(DATE_ATOM);
-            $result = self::sendJsonRequest($url, $payload, $auth);
-
-            $entry = [
-                'webhook_id' => $webhookId,
-                'request_id' => $requestId,
-                'client_id' => $clientId,
-                'event' => $event,
-                'status' => $result['ok'] ? 'delivered' : 'failed',
-                'target_url' => $url,
-                'payload' => $payload,
-                'sent_at' => $sentAt,
-                'response_code' => $result['status_code'],
-                'response_body' => $result['body'],
-                'error' => $result['error'],
-            ];
-
-            self::registerWebhook($entry);
-            self::appendWebhookToInteraction($requestId, $entry);
+            self::deliverScheduledWebhook($dispatch);
         });
 
+        return true;
+    }
+
+    /**
+     * Entrega um webhook agendado: sleep do delay, POST JSON, persistência do
+     * resultado em `webhook_dispatches` e anexação em `interactions.webhooks[]`.
+     * Recebe o `client_id` explícito porque é invocada fora do contexto HTTP
+     * (pelo worker spawnado em `bin/webhook-worker.php`).
+     */
+    public static function deliverScheduledWebhook(array $dispatch): void
+    {
+        $url       = (string) ($dispatch['url'] ?? '');
+        $payload   = is_array($dispatch['payload'] ?? null) ? $dispatch['payload'] : [];
+        $event     = (string) ($dispatch['event'] ?? '');
+        $requestId = (string) ($dispatch['request_id'] ?? '');
+        $clientId  = (string) ($dispatch['client_id'] ?? '');
+        $webhookId = (string) ($dispatch['webhook_id'] ?? '');
+        $delay     = (int) ($dispatch['delay_seconds'] ?? 0);
+        $auth      = is_array($dispatch['auth'] ?? null) ? $dispatch['auth'] : null;
+
+        if ($url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
+            return;
+        }
+
+        sleep(max(0, $delay));
+        $sentAt = date(DATE_ATOM);
+        $result = self::sendJsonRequest($url, $payload, $auth);
+
+        $entry = [
+            'webhook_id'    => $webhookId,
+            'request_id'    => $requestId,
+            'client_id'     => $clientId,
+            'event'         => $event,
+            'status'        => $result['ok'] ? 'delivered' : 'failed',
+            'target_url'    => $url,
+            'payload'       => $payload,
+            'sent_at'       => $sentAt,
+            'response_code' => $result['status_code'],
+            'response_body' => $result['body'],
+            'error'         => $result['error'],
+        ];
+
+        self::registerWebhook($entry);
+        self::appendWebhookToInteraction($requestId, $entry, $clientId);
+    }
+
+    private static function spawnWebhookWorker(array $dispatch): bool
+    {
+        if (!function_exists('exec')) {
+            return false;
+        }
+        $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+        if (in_array('exec', $disabled, true)) {
+            return false;
+        }
+
+        $dir = (defined('TMP') ? TMP : sys_get_temp_dir() . '/') . 'cslabs/dispatches';
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            return false;
+        }
+
+        $file = $dir . '/' . ($dispatch['webhook_id'] ?? bin2hex(random_bytes(8))) . '.json';
+        if (file_put_contents($file, Json::pretty($dispatch)) === false) {
+            return false;
+        }
+
+        $worker = (defined('APP') ? APP : __DIR__ . '/../') . 'bin/webhook-worker.php';
+        $php    = PHP_BINARY !== '' ? PHP_BINARY : 'php';
+
+        # Desconecta stdin/stdout/stderr e backgrounda — funciona em php -S,
+        # mod_php, FPM e CLI. Independe de fastcgi_finish_request.
+        $cmd = sprintf(
+            '%s %s %s > /dev/null 2>&1 &',
+            escapeshellcmd($php),
+            escapeshellarg($worker),
+            escapeshellarg($file)
+        );
+
+        exec($cmd);
         return true;
     }
 
@@ -2457,26 +2629,6 @@ class Cslabs
         return $items[hexdec(substr(hash('sha256', $seed), 0, 6)) % count($items)];
     }
 
-    private static function storageRoot(): string
-    {
-        $root = TMP . 'cslabs';
-        self::ensureDir($root);
-        self::ensureDir($root . '/clients');
-        return $root;
-    }
-
-    private static function clientRoot(string $clientId): string
-    {
-        return self::storageRoot() . '/clients/' . self::safeName($clientId);
-    }
-
-    private static function ensureDir(string $directory): void
-    {
-        if (!is_dir($directory)) {
-            mkdir($directory, 0775, true);
-        }
-    }
-
     private static function headers(): array
     {
         $headers = [];
@@ -2600,75 +2752,156 @@ class Cslabs
 
     private static function resolveWorkerId(string $clientId, string $ip, array $headers): string
     {
-        $path = self::workerOriginPath($clientId, $ip);
-        $origin = Json::read($path);
-
-        if (is_array($origin) && !empty($origin['worker_id'])) {
-            return (string) $origin['worker_id'];
+        $ipHash = hash('sha256', $ip);
+        $stmt = Db::pdo()->prepare('SELECT worker_id FROM client_origins WHERE client_id = :c AND ip_hash = :h LIMIT 1');
+        $stmt->execute([':c' => $clientId, ':h' => $ipHash]);
+        $existing = $stmt->fetchColumn();
+        if (is_string($existing) && $existing !== '') {
+            return $existing;
         }
 
-        $workerId = 'wrk_' . bin2hex(random_bytes(8));
+        return 'wrk_' . bin2hex(random_bytes(8));
+    }
+
+    private static function upsertWorker(string $clientId, string $workerId, string $ip, ?string $authHint, string $lastSeenAt): void
+    {
         $payload = [
-            'worker_id' => $workerId,
-            'client_id' => $clientId,
-            'ip' => $ip,
-            'user_agent' => $headers['User-Agent'] ?? null,
-            'first_seen_at' => date(DATE_ATOM),
-            'last_seen_at' => date(DATE_ATOM),
+            'worker_id'    => $workerId,
+            'client_id'    => $clientId,
+            'ip'           => $ip,
+            'auth_hint'    => $authHint,
+            'last_seen_at' => $lastSeenAt,
         ];
 
-        self::ensureDir(dirname($path));
-        Json::write($path, $payload);
-
-        return $workerId;
+        $stmt = Db::pdo()->prepare(<<<'SQL'
+            INSERT INTO client_workers
+                (client_id, worker_id, ip, auth_hint, last_seen_at, data)
+            VALUES
+                (:c, :w, :i, :a, :l, :d)
+            ON CONFLICT(client_id, worker_id) DO UPDATE SET
+                ip           = excluded.ip,
+                auth_hint    = excluded.auth_hint,
+                last_seen_at = excluded.last_seen_at,
+                data         = excluded.data
+        SQL);
+        $stmt->execute([
+            ':c' => $clientId,
+            ':w' => $workerId,
+            ':i' => $ip,
+            ':a' => $authHint,
+            ':l' => $lastSeenAt,
+            ':d' => Json::pretty($payload),
+        ]);
     }
 
     private static function touchWorkerOrigin(string $clientId, string $ip, string $workerId, array $headers): void
     {
-        $path = self::workerOriginPath($clientId, $ip);
-        $origin = Json::read($path);
+        $ipHash = hash('sha256', $ip);
+        $now = date(DATE_ATOM);
+        $userAgent = $headers['User-Agent'] ?? null;
 
-        $payload = is_array($origin) ? $origin : [];
-        $payload['worker_id'] = $workerId;
-        $payload['client_id'] = $clientId;
-        $payload['ip'] = $ip;
-        $payload['user_agent'] = $payload['user_agent'] ?? ($headers['User-Agent'] ?? null);
-        $payload['first_seen_at'] = $payload['first_seen_at'] ?? date(DATE_ATOM);
-        $payload['last_seen_at'] = date(DATE_ATOM);
+        $pdo = Db::pdo();
+        $stmt = $pdo->prepare('SELECT data FROM client_origins WHERE client_id = :c AND ip_hash = :h LIMIT 1');
+        $stmt->execute([':c' => $clientId, ':h' => $ipHash]);
+        $existingRaw = $stmt->fetchColumn();
 
-        self::ensureDir(dirname($path));
-        Json::write($path, $payload);
-    }
+        $payload = [];
+        if ($existingRaw !== false) {
+            $decoded = json_decode((string) $existingRaw, true);
+            if (is_array($decoded)) {
+                $payload = $decoded;
+            }
+        }
 
-    private static function workerOriginPath(string $clientId, string $ip): string
-    {
-        return self::clientRoot($clientId) . '/indexes/origins/' . hash('sha256', $ip) . '.json';
+        $payload['worker_id']     = $workerId;
+        $payload['client_id']     = $clientId;
+        $payload['ip']            = $ip;
+        $payload['user_agent']    = $payload['user_agent'] ?? $userAgent;
+        $payload['first_seen_at'] = $payload['first_seen_at'] ?? $now;
+        $payload['last_seen_at']  = $now;
+
+        $upsert = $pdo->prepare(<<<'SQL'
+            INSERT INTO client_origins
+                (client_id, ip_hash, ip, worker_id, user_agent, first_seen_at, last_seen_at, data)
+            VALUES
+                (:c, :h, :i, :w, :u, :f, :l, :d)
+            ON CONFLICT(client_id, ip_hash) DO UPDATE SET
+                ip            = excluded.ip,
+                worker_id     = excluded.worker_id,
+                user_agent    = COALESCE(client_origins.user_agent, excluded.user_agent),
+                last_seen_at  = excluded.last_seen_at,
+                data          = excluded.data
+        SQL);
+        $upsert->execute([
+            ':c' => $clientId,
+            ':h' => $ipHash,
+            ':i' => $ip,
+            ':w' => $workerId,
+            ':u' => $payload['user_agent'],
+            ':f' => $payload['first_seen_at'],
+            ':l' => $now,
+            ':d' => Json::pretty($payload),
+        ]);
     }
 
     private static function registerWebhook(array $entry): void
     {
         $clientId = (string) ($entry['client_id'] ?? self::context()['client_id']);
         $webhookId = self::safeName((string) ($entry['webhook_id'] ?? ('wh_' . bin2hex(random_bytes(8)))));
-        $directory = self::clientRoot($clientId) . '/webhooks/' . date('Ymd');
-        self::ensureDir($directory);
-        Json::write($directory . '/' . $webhookId . '.json', $entry);
+        $now = date(DATE_ATOM);
+
+        $stmt = Db::pdo()->prepare(<<<'SQL'
+            INSERT INTO webhook_dispatches
+                (client_id, webhook_id, request_id, event, status, target_url, created_at, updated_at, data)
+            VALUES
+                (:c, :w, :r, :e, :s, :u, :ca, :ua, :d)
+            ON CONFLICT(client_id, webhook_id) DO UPDATE SET
+                request_id = excluded.request_id,
+                event      = excluded.event,
+                status     = excluded.status,
+                target_url = excluded.target_url,
+                updated_at = excluded.updated_at,
+                data       = excluded.data
+        SQL);
+        $stmt->execute([
+            ':c'  => $clientId,
+            ':w'  => $webhookId,
+            ':r'  => $entry['request_id'] ?? null,
+            ':e'  => $entry['event'] ?? null,
+            ':s'  => $entry['status'] ?? null,
+            ':u'  => $entry['target_url'] ?? null,
+            ':ca' => $now,
+            ':ua' => $now,
+            ':d'  => Json::pretty($entry),
+        ]);
     }
 
-    private static function appendWebhookToInteraction(string $requestId, array $entry): void
+    private static function appendWebhookToInteraction(string $requestId, array $entry, ?string $clientId = null): void
     {
-        $interaction = self::findInteraction(self::context()['client_id'], $requestId);
-
-        if (!$interaction) {
+        if ($clientId === null || $clientId === '') {
+            $clientId = self::context()['client_id'];
+        }
+        $pdo = Db::pdo();
+        $stmt = $pdo->prepare('SELECT data FROM interactions WHERE client_id = :c AND request_id = :r LIMIT 1');
+        $stmt->execute([':c' => $clientId, ':r' => $requestId]);
+        $raw = $stmt->fetchColumn();
+        if ($raw === false) {
+            return;
+        }
+        $interaction = json_decode((string) $raw, true);
+        if (!is_array($interaction)) {
             return;
         }
 
         $interaction['webhooks'] ??= [];
         $interaction['webhooks'][] = $entry;
 
-        $day = date('Ymd', strtotime((string) ($interaction['received_at'] ?? 'now')));
-        $directory = self::clientRoot(self::context()['client_id']) . '/interactions/' . $day;
-        self::ensureDir($directory);
-        Json::write($directory . '/' . self::safeName($requestId) . '.json', $interaction);
+        $update = $pdo->prepare('UPDATE interactions SET data = :d WHERE client_id = :c AND request_id = :r');
+        $update->execute([
+            ':d' => Json::pretty($interaction),
+            ':c' => $clientId,
+            ':r' => $requestId,
+        ]);
     }
 
     private static function sendJsonRequest(string $url, array $payload, ?array $auth = null): array

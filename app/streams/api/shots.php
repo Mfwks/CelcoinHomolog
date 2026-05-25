@@ -4,6 +4,26 @@ use App\Core\Cslabs;
 use App\Core\Json;
 
 $clientId = preg_replace('/[^a-zA-Z0-9._-]/', '', $web->args->identifier ?? '');
+
+$purgeError = null;
+$purgeResult = null;
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ($_POST['action'] ?? '') === 'purge') {
+    $confirmInput = trim((string) ($_POST['confirm_client_id'] ?? ''));
+    if ($clientId === '') {
+        $purgeError = 'Client ID ausente na URL.';
+    } elseif ($confirmInput !== $clientId) {
+        $purgeError = 'Confirmação não bate — digite o client_id exato.';
+    } else {
+        $purgeResult = Cslabs::purgeClient($clientId);
+        if (!empty($purgeResult['ok'])) {
+            header('Location: ' . url('shots/' . $clientId . '/') . '?purged=1');
+            exit;
+        }
+        $purgeError = 'Falha ao excluir.';
+    }
+}
+
+$purged = !empty($_GET['purged']);
 $selectedRequestId = preg_replace('/[^a-zA-Z0-9_-]/', '', $_GET['request'] ?? '');
 $interactions = $clientId !== '' ? Cslabs::listInteractions($clientId) : [];
 $selected = $selectedRequestId !== '' ? Cslabs::findInteraction($clientId, $selectedRequestId) : ($interactions[0] ?? null);
@@ -137,6 +157,7 @@ function prettyPanel(mixed $value): string
             display: grid;
             grid-template-columns: minmax(320px, 430px) minmax(0, 1fr);
             gap: 20px;
+            align-items: start;
         }
 
         .panel {
@@ -144,6 +165,14 @@ function prettyPanel(mixed $value): string
             border-radius: 20px;
             background: rgba(22, 35, 59, 0.92);
             overflow: hidden;
+        }
+
+        .layout > aside.panel {
+            position: sticky;
+            top: 20px;
+            max-height: calc(100vh - 40px);
+            display: flex;
+            flex-direction: column;
         }
 
         .panel-header {
@@ -163,9 +192,30 @@ function prettyPanel(mixed $value): string
         }
 
         .list {
-            max-height: calc(100vh - 280px);
-            overflow: auto;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
             padding: 12px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(135, 168, 255, 0.25) transparent;
+        }
+
+        .list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .list::-webkit-scrollbar-thumb {
+            background: rgba(135, 168, 255, 0.18);
+            border-radius: 999px;
+        }
+
+        .list::-webkit-scrollbar-thumb:hover {
+            background: rgba(135, 168, 255, 0.4);
         }
 
         .item {
@@ -273,17 +323,155 @@ function prettyPanel(mixed $value): string
                 grid-template-columns: 1fr;
             }
 
-            .list {
+            .layout > aside.panel {
+                position: static;
                 max-height: none;
             }
+
+            .list {
+                max-height: 60vh;
+            }
+        }
+
+        .hero-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 18px;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 9px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-family: var(--sans);
+            border: 1px solid var(--line);
+            background: var(--panel);
+            color: var(--text);
+            cursor: pointer;
+            transition: 0.18s ease;
+        }
+
+        .btn:hover {
+            border-color: var(--accent-2);
+        }
+
+        .btn-danger {
+            border-color: rgba(255, 122, 122, 0.4);
+            color: var(--danger);
+            background: rgba(255, 122, 122, 0.08);
+        }
+
+        .btn-danger:hover {
+            border-color: var(--danger);
+            background: rgba(255, 122, 122, 0.15);
+        }
+
+        .banner {
+            margin-bottom: 16px;
+            padding: 12px 16px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+
+        .banner-ok {
+            border-color: rgba(112, 225, 200, 0.4);
+            background: rgba(112, 225, 200, 0.08);
+            color: var(--accent);
+        }
+
+        .banner-err {
+            border-color: rgba(255, 122, 122, 0.4);
+            background: rgba(255, 122, 122, 0.08);
+            color: var(--danger);
+        }
+
+        dialog.purge {
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            background: var(--bg-soft);
+            color: var(--text);
+            padding: 0;
+            max-width: 520px;
+            width: 90vw;
+        }
+
+        dialog.purge::backdrop {
+            background: rgba(5, 10, 20, 0.7);
+            backdrop-filter: blur(4px);
+        }
+
+        dialog.purge .dialog-body {
+            padding: 22px 24px;
+        }
+
+        dialog.purge h3 {
+            margin: 0 0 10px;
+            font-size: 18px;
+            color: var(--danger);
+        }
+
+        dialog.purge p {
+            margin: 0 0 14px;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        dialog.purge code {
+            font-family: var(--mono);
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.04);
+            padding: 1px 6px;
+            border-radius: 6px;
+        }
+
+        dialog.purge input[type="text"] {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid var(--line);
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 13px;
+            margin-bottom: 14px;
+        }
+
+        dialog.purge input[type="text"]:focus {
+            outline: none;
+            border-color: var(--accent-2);
+        }
+
+        dialog.purge .dialog-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .support-link {
+            color: var(--accent-2);
+            text-decoration: underline;
+            text-underline-offset: 3px;
         }
     </style>
 </head>
 <body>
     <div class="page">
+        <?php if ($purged): ?>
+            <div class="banner banner-ok">Dados do cliente <code><?= htmlspecialchars($clientId) ?></code> excluídos.</div>
+        <?php endif; ?>
+        <?php if ($purgeError): ?>
+            <div class="banner banner-err"><?= htmlspecialchars($purgeError) ?></div>
+        <?php endif; ?>
+
         <section class="hero">
             <h1>CSLabs Shots</h1>
-            <p>Visão consolidada das interações persistidas para um cliente de homologação.</p>
+            <p>Visão consolidada das interações persistidas para um cliente de homologação. Precisa de ajuda? <a class="support-link" href="https://microframeworks.com/contact/" target="_blank" rel="noopener">Acesse o suporte</a>.</p>
 
             <div class="meta">
                 <div class="meta-card">
@@ -303,7 +491,29 @@ function prettyPanel(mixed $value): string
                     <strong><?= htmlspecialchars($summary['last_seen'] ?? 'sem registros') ?></strong>
                 </div>
             </div>
+
+            <?php if ($clientId !== ''): ?>
+                <div class="hero-actions">
+                    <button type="button" class="btn btn-danger" onclick="document.getElementById('purgeDialog').showModal()">Excluir dados deste cliente</button>
+                </div>
+            <?php endif; ?>
         </section>
+
+        <?php if ($clientId !== ''): ?>
+            <dialog class="purge" id="purgeDialog">
+                <form method="post" class="dialog-body">
+                    <h3>Excluir dados do cliente</h3>
+                    <p>Essa ação remove <strong>todas</strong> as interações, entidades, workers, origens, webhooks e tokens emitidos para <code><?= htmlspecialchars($clientId) ?></code>. Não dá pra desfazer.</p>
+                    <p>Pra confirmar, digite o client_id abaixo:</p>
+                    <input type="text" name="confirm_client_id" autocomplete="off" placeholder="<?= htmlspecialchars($clientId) ?>" required>
+                    <input type="hidden" name="action" value="purge">
+                    <div class="dialog-actions">
+                        <button type="button" class="btn" onclick="document.getElementById('purgeDialog').close()">Cancelar</button>
+                        <button type="submit" class="btn btn-danger">Excluir definitivamente</button>
+                    </div>
+                </form>
+            </dialog>
+        <?php endif; ?>
 
         <section class="layout">
             <aside class="panel">

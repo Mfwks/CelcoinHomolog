@@ -82,5 +82,71 @@ class Db
             CREATE INDEX IF NOT EXISTS entities_listing_idx
                 ON entities (client_id, type, entity_key)
         SQL);
+
+        $pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS interactions (
+                client_id       TEXT NOT NULL,
+                request_id      TEXT NOT NULL,
+                received_at     TEXT NOT NULL,
+                received_at_us  REAL NOT NULL,
+                worker_id       TEXT,
+                method          TEXT,
+                path            TEXT,
+                status_code     INTEGER,
+                data            TEXT NOT NULL,
+                PRIMARY KEY (client_id, request_id)
+            )
+        SQL);
+
+        $pdo->exec(<<<'SQL'
+            CREATE INDEX IF NOT EXISTS interactions_listing_idx
+                ON interactions (client_id, received_at_us DESC)
+        SQL);
+
+        $pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS client_workers (
+                client_id    TEXT NOT NULL,
+                worker_id    TEXT NOT NULL,
+                ip           TEXT,
+                auth_hint    TEXT,
+                last_seen_at TEXT,
+                data         TEXT NOT NULL,
+                PRIMARY KEY (client_id, worker_id)
+            )
+        SQL);
+
+        $pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS client_origins (
+                client_id      TEXT NOT NULL,
+                ip_hash        TEXT NOT NULL,
+                ip             TEXT,
+                worker_id      TEXT,
+                user_agent     TEXT,
+                first_seen_at  TEXT,
+                last_seen_at   TEXT,
+                data           TEXT NOT NULL,
+                PRIMARY KEY (client_id, ip_hash)
+            )
+        SQL);
+
+        $pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS webhook_dispatches (
+                client_id    TEXT NOT NULL,
+                webhook_id   TEXT NOT NULL,
+                request_id   TEXT,
+                event        TEXT,
+                status       TEXT,
+                target_url   TEXT,
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                data         TEXT NOT NULL,
+                PRIMARY KEY (client_id, webhook_id)
+            )
+        SQL);
+
+        $pdo->exec(<<<'SQL'
+            CREATE INDEX IF NOT EXISTS webhook_dispatches_by_request_idx
+                ON webhook_dispatches (client_id, request_id)
+        SQL);
     }
 }
