@@ -393,6 +393,15 @@ class Cslabs
     {
         foreach ($fields as $field) {
             $value = self::arrayGet($payload, $field);
+
+            if (in_array($field, ['amount', 'value'], true)) {
+                $scenario = self::scenarioFromAmount($value, '');
+
+                if ($scenario !== '') {
+                    return $scenario;
+                }
+            }
+
             $scenario = self::scenarioFromValue($value, '');
 
             if ($scenario !== '') {
@@ -401,6 +410,100 @@ class Cslabs
         }
 
         return $default;
+    }
+
+    /*
+     * Magic-amount: valores < R$ 1,00 viram códigos de cenário (centavos = código).
+     * Disparado universalmente pelos streams transacionais que já consultam
+     * scenarioFromPayload com o campo `amount`/`value`. Catálogo em docs/scenarios.md.
+     */
+    public static function scenarioFromAmount(mixed $amount, string $default = 'success'): string
+    {
+        if ($amount === null || $amount === '') {
+            return $default;
+        }
+
+        $value = is_numeric($amount) ? (float) $amount : null;
+
+        if ($value === null || $value <= 0 || $value >= 1.0) {
+            return $default;
+        }
+
+        $cents = (int) round($value * 100);
+
+        return self::SCENARIO_BY_CENTS[$cents] ?? $default;
+    }
+
+    public const SCENARIO_BY_CENTS = [
+        1  => 'insufficient_funds',
+        2  => 'key_not_found',
+        3  => 'fraud',
+        4  => 'limit_exceeded',
+        5  => 'blocked',
+        6  => 'timeout',
+        7  => 'bank_unavailable',
+        8  => 'duplicate',
+        9  => 'invalid_document',
+        10 => 'daily_limit',
+        11 => 'receiver_not_found',
+        12 => 'invalid_key',
+        13 => 'kyc_pending',
+        14 => 'rate_limit',
+        15 => 'error',
+        16 => 'not_found',
+        17 => 'failed',
+    ];
+
+    /*
+     * Último cenário disparado por paymentError/billPaymentError/chargeError nesta request.
+     * Streams checam pra setar http_response_code coerente (429, 503, 504, etc.).
+     */
+    private static string $lastErrorScenario = 'success';
+
+    public static function lastErrorScenario(): string
+    {
+        return self::$lastErrorScenario;
+    }
+
+    public static function resetLastErrorScenario(): void
+    {
+        self::$lastErrorScenario = 'success';
+    }
+
+    /*
+     * Resposta de erro genérica reutilizando o catálogo do paymentError.
+     * Útil em streams sem método de cenário dedicado (ex.: internal-transfer).
+     */
+    public static function scenarioErrorResponse(string $scenario): array
+    {
+        return self::paymentError($scenario);
+    }
+
+    /*
+     * HTTP status mapeado por cenário. Usado pelos streams que ecoam erro
+     * para retornar o código realista (429, 503, 504, etc.).
+     */
+    public static function scenarioHttpStatus(string $scenario): int
+    {
+        return [
+            'insufficient_funds' => 422,
+            'key_not_found'      => 404,
+            'fraud'              => 422,
+            'limit_exceeded'     => 422,
+            'blocked'            => 403,
+            'timeout'            => 504,
+            'bank_unavailable'   => 503,
+            'duplicate'          => 409,
+            'invalid_document'   => 422,
+            'daily_limit'        => 422,
+            'receiver_not_found' => 404,
+            'invalid_key'        => 422,
+            'kyc_pending'        => 403,
+            'rate_limit'         => 429,
+            'error'              => 500,
+            'not_found'          => 404,
+            'failed'             => 400,
+        ][$scenario] ?? 400;
     }
 
     public static function pixKeyType(string $key): string
@@ -536,6 +639,7 @@ class Cslabs
             'scenario',
             'mockScenario',
             'mock_scenario',
+            'amount',
         ]);
 
         $digitable = trim((string) self::arrayGet($payload, 'barCode.digitable'));
@@ -597,7 +701,7 @@ class Cslabs
 
     public static function pixReverseResponse(array $payload, ?string $transactionId = null): array
     {
-        $scenario = self::scenarioFromPayload($payload, ['scenario', 'mockScenario', 'mock_scenario', 'reason']);
+        $scenario = self::scenarioFromPayload($payload, ['scenario', 'mockScenario', 'mock_scenario', 'reason', 'amount']);
         if ($scenario !== 'success') {
             return self::paymentError($scenario);
         }
@@ -1133,7 +1237,7 @@ class Cslabs
 
     public static function spbTransferResponse(array $payload): array
     {
-        $scenario = self::scenarioFromPayload($payload, ['scenario', 'mockScenario', 'mock_scenario', 'description', 'clientCode']);
+        $scenario = self::scenarioFromPayload($payload, ['scenario', 'mockScenario', 'mock_scenario', 'description', 'clientCode', 'amount']);
         $amount = (float) ($payload['amount'] ?? 0);
         $clientCode = trim((string) ($payload['clientCode'] ?? ''));
         $debit = is_array($payload['debitParty'] ?? null) ? $payload['debitParty'] : [];
@@ -1156,14 +1260,9 @@ class Cslabs
             ];
         }
 
-        if ($scenario === 'fraud') {
-            return ['version' => '1.0.0', 'status' => 'ERROR', 'error' => ['errorCode' => 'CBE171', 'message' => 'Transação bloqueada por suspeita de fraude.']];
-        }
-        if ($scenario === 'blocked') {
-            return ['version' => '1.0.0', 'status' => 'ERROR', 'error' => ['errorCode' => 'CBE172', 'message' => 'Transação bloqueada para a conta informada.']];
-        }
-        if ($scenario === 'failed' || $scenario === 'error') {
-            return ['version' => '1.0.0', 'status' => 'ERROR', 'error' => ['errorCode' => 'CBE100', 'message' => 'Existe um lançamento idêntico pendente. Favor aguarde para realizar esta operação para evitar duplicidade.']];
+        if ($scenario !== 'success' && $scenario !== '') {
+            $err = self::paymentError($scenario);
+            return ['version' => '1.0.0', 'status' => 'ERROR', 'error' => $err['error']];
         }
 
         $debitSeed = hash('sha256', (string) $debit['account']);
@@ -1505,6 +1604,7 @@ class Cslabs
             'mock_scenario',
             'externalId',
             'key',
+            'amount',
         ]);
 
         if ($scenario !== 'success') {
@@ -1536,6 +1636,7 @@ class Cslabs
             'mock_scenario',
             'clientRequestId',
             'account',
+            'amount',
         ]);
 
         if ($scenario !== 'success') {
@@ -2290,12 +2391,25 @@ class Cslabs
 
     private static function paymentError(string $scenario): array
     {
+        self::$lastErrorScenario = $scenario;
         $errors = [
             'fraud' => ['CBE171', 'Transação bloqueada por suspeita de fraude. Contate o suporte para mais informações.'],
             'not_found' => ['CBE404', 'Transação ou recurso não encontrado.'],
             'blocked' => ['CBE172', 'Transação bloqueada para a conta informada.'],
             'failed' => ['CBE400', 'Transação rejeitada pela instituição recebedora.'],
             'error' => ['CBE500', 'Erro interno ao processar a transação.'],
+            'insufficient_funds' => ['CBE301', 'Saldo insuficiente para concluir a operação.'],
+            'key_not_found' => ['CBE189', 'Chave Pix não encontrada no DICT.'],
+            'limit_exceeded' => ['CBE410', 'Valor excede o limite por transação configurado para a conta.'],
+            'daily_limit' => ['CBE411', 'Limite diário de transações Pix excedido.'],
+            'receiver_not_found' => ['CBE405', 'Conta destinatária não localizada na instituição informada.'],
+            'invalid_key' => ['CBE190', 'Chave Pix inválida ou em formato não suportado.'],
+            'invalid_document' => ['CBE007', 'CPF/CNPJ informado é inválido.'],
+            'kyc_pending' => ['CBE401', 'Cliente possui processo KYC pendente. Operação indisponível.'],
+            'timeout' => ['CBE504', 'Tempo de resposta do SPI excedido. Tente novamente em instantes.'],
+            'bank_unavailable' => ['CBE503', 'Instituição financeira destinatária temporariamente indisponível.'],
+            'duplicate' => ['CBE100', 'Existe um lançamento idêntico pendente. Aguarde para evitar duplicidade.'],
+            'rate_limit' => ['CBE429', 'Limite de requisições excedido. Tente novamente em instantes.'],
         ];
 
         [$code, $message] = $errors[$scenario] ?? $errors['error'];
@@ -2312,12 +2426,25 @@ class Cslabs
 
     private static function billPaymentError(string $scenario): array
     {
+        self::$lastErrorScenario = $scenario;
         $errors = [
             'fraud' => ['CSLAB403', 'Boleto bloqueado por suspeita de fraude.'],
             'not_found' => ['CSLAB404', 'Registro ou funcionalidade inexistente.'],
             'blocked' => ['CSLAB423', 'Boleto bloqueado para pagamento.'],
             'failed' => ['CSLAB400', 'Boleto rejeitado pela instituição recebedora.'],
             'error' => ['CSLAB500', 'Erro interno ao consultar boleto.'],
+            'insufficient_funds' => ['CBE301', 'Saldo insuficiente para pagamento do boleto.'],
+            'limit_exceeded' => ['CBE410', 'Valor do boleto excede o limite configurado para a conta.'],
+            'daily_limit' => ['CBE411', 'Limite diário de pagamentos excedido.'],
+            'invalid_document' => ['CBE007', 'CPF/CNPJ do pagador é inválido.'],
+            'kyc_pending' => ['CBE401', 'Cliente possui KYC pendente. Pagamento de boleto indisponível.'],
+            'timeout' => ['CBE504', 'Tempo de resposta da arrecadadora excedido.'],
+            'bank_unavailable' => ['CBE503', 'Arrecadadora temporariamente indisponível.'],
+            'duplicate' => ['CBE100', 'Boleto já em processamento. Aguarde para evitar duplicidade.'],
+            'rate_limit' => ['CBE429', 'Limite de requisições excedido. Tente novamente em instantes.'],
+            'key_not_found' => ['CSLAB404', 'Linha digitável não localizada.'],
+            'receiver_not_found' => ['CSLAB404', 'Arrecadadora não localizada.'],
+            'invalid_key' => ['CSLAB400', 'Linha digitável inválida.'],
         ];
 
         [$code, $message] = $errors[$scenario] ?? $errors['error'];
@@ -2525,12 +2652,25 @@ class Cslabs
 
     private static function chargeError(string $scenario): array
     {
+        self::$lastErrorScenario = $scenario;
         $errors = [
             'fraud' => ['CSLAB403', 'Emissão bloqueada por suspeita de fraude.'],
             'not_found' => ['CSLAB404', 'Conta ou chave Pix não encontrada.'],
             'blocked' => ['CSLAB423', 'Conta bloqueada para emissão.'],
             'failed' => ['CSLAB400', 'Dados obrigatórios inválidos para emissão de boleto.'],
             'error' => ['CSLAB500', 'Erro interno ao emitir boleto.'],
+            'insufficient_funds' => ['CBE301', 'Conta recebedora sem saldo mínimo para emissão.'],
+            'key_not_found' => ['CBE189', 'Chave Pix da cobrança não encontrada no DICT.'],
+            'invalid_key' => ['CBE190', 'Chave Pix da cobrança inválida.'],
+            'limit_exceeded' => ['CBE410', 'Valor da cobrança excede o limite configurado.'],
+            'daily_limit' => ['CBE411', 'Limite diário de emissão excedido.'],
+            'invalid_document' => ['CBE007', 'CPF/CNPJ do beneficiário é inválido.'],
+            'receiver_not_found' => ['CSLAB404', 'Conta beneficiária não localizada.'],
+            'kyc_pending' => ['CBE401', 'Beneficiário possui KYC pendente. Emissão indisponível.'],
+            'timeout' => ['CBE504', 'Tempo de resposta excedido ao emitir boleto.'],
+            'bank_unavailable' => ['CBE503', 'Emissor temporariamente indisponível.'],
+            'duplicate' => ['CBE100', 'Cobrança duplicada para o externalId informado.'],
+            'rate_limit' => ['CBE429', 'Limite de requisições excedido. Tente novamente em instantes.'],
         ];
 
         [$code, $message] = $errors[$scenario] ?? $errors['error'];

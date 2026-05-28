@@ -67,6 +67,8 @@ if (($response['status'] ?? null) === 'SUCCESS') {
     ]);
 
     Cslabs::scheduleWebhook('pix-payment-out', $webhookPayload, 2, $webhookUrl);
+} elseif (($response['status'] ?? null) === 'ERROR') {
+    http_response_code(Cslabs::scenarioHttpStatus(Cslabs::lastErrorScenario()));
 }
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

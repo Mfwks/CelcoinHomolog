@@ -25,7 +25,7 @@ if (!is_array($body)) {
 $response = Cslabs::chargeResponse($body);
 
 if (($response['status'] ?? null) !== 'SUCCESS') {
-    http_response_code(422);
+    http_response_code(Cslabs::scenarioHttpStatus(Cslabs::lastErrorScenario()));
     echo json_encode($response, JSON_PRETTY_PRINT);
     return;
 }

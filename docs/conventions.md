@@ -37,6 +37,19 @@ Espelhado de `start.php`:
 
 Códigos de erro internos seguem o padrão `CSLAB<NNN>`.
 
+## Cenários de teste (magic values)
+
+Para simular erros da Celcoin em testes do consumidor, dois gatilhos universais:
+
+- **Magic amount**: `amount < R$ 1,00` em qualquer endpoint transacional dispara
+  um cenário (R$ 0,01 = saldo insuficiente, R$ 0,03 = fraude, R$ 0,06 = timeout, etc.).
+- **Convenção da chave PIX**: para endpoints sem `amount` (DICT, onboarding,
+  account/check), trechos como `erro@`, `fraude@`, `bloqueado@` na chave disparam
+  o cenário correspondente.
+
+Tabela completa, mapeamento centavos→cenário e instruções para adicionar novos
+em [`docs/scenarios.md`](./scenarios.md).
+
 ## Roteamento
 
 - `$web->add('/path', 'subdir/file')` — `subdir/file` é resolvido como `app/streams/subdir/file.php`.

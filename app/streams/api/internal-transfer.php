@@ -28,6 +28,13 @@ $debitAccount = trim((string) ($body['debitParty']['account'] ?? ''));
 $creditAccount = trim((string) ($body['creditParty']['account'] ?? ''));
 $description = trim((string) ($body['description'] ?? ''));
 
+$scenario = Cslabs::scenarioFromAmount($amount);
+if ($scenario !== 'success') {
+    http_response_code(Cslabs::scenarioHttpStatus($scenario));
+    echo json_encode(Cslabs::scenarioErrorResponse($scenario), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    return;
+}
+
 if ($amount <= 0 || $clientRequestId === '' || $debitAccount === '' || $creditAccount === '') {
     http_response_code(422);
     echo json_encode([

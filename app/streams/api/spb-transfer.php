@@ -59,7 +59,7 @@ if (!is_array($body)) {
 $response = Cslabs::spbTransferResponse($body);
 
 if (($response['status'] ?? null) === 'ERROR') {
-    http_response_code(400);
+    http_response_code(Cslabs::scenarioHttpStatus(Cslabs::lastErrorScenario()));
     echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     return;
 }
