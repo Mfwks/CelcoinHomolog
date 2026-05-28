@@ -1,0 +1,1228 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CelcoinHomolog — Referência de API</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#161922; --panel2:#1c2030; --border:#2a2f42;
+  --text:#e6e7ea; --muted:#9aa0b4; --link:#8ab4ff; --accent:#7cdc9c;
+  --post:#3fbf6e; --get:#3b82f6; --put:#f59e0b; --delete:#ef4444; --patch:#a855f7;
+  --code-bg:#0b0d12; --tag:#2a3148;
+  --mono:'JetBrains Mono','Fira Code',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,sans-serif;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#fafbfc; --panel:#fff; --panel2:#f5f6fa; --border:#e2e5ee;
+    --text:#1a1d24; --muted:#5b6072; --link:#0a59d8; --accent:#0a8a4a;
+    --code-bg:#f0f2f7; --tag:#dfe3ee;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.55}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre{font-family:var(--mono);font-size:13px}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:100vh}
+aside.sidebar{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;background:var(--panel);border-right:1px solid var(--border);padding:18px 14px}
+aside header h1{font-size:16px;margin:0 0 2px;letter-spacing:-.01em}
+aside header p{font-size:12px;color:var(--muted);margin:0 0 14px}
+aside input[type=search]{width:100%;padding:8px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;margin-bottom:14px}
+aside input[type=search]:focus{outline:none;border-color:var(--link)}
+aside nav ul{list-style:none;padding:0;margin:0}
+aside nav li{margin:0}
+aside nav a{display:block;padding:4px 8px;border-radius:5px;font-size:13px;color:var(--muted)}
+aside nav a:hover{background:var(--panel2);color:var(--text);text-decoration:none}
+aside nav .section-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:14px 8px 4px;font-weight:600}
+main{max-width:920px;width:100%;padding:36px 40px;margin:0 auto}
+h2{font-size:22px;margin:38px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border);scroll-margin-top:10px}
+h2:first-child{margin-top:0}
+h3{font-size:15px;margin:0;font-family:var(--mono);font-weight:600}
+section.intro p{color:var(--muted);max-width:64ch}
+section.intro h2{border:0;padding:0}
+article.endpoint{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin:0 0 12px;scroll-margin-top:10px}
+article.endpoint > header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.method{display:inline-block;padding:2px 8px;border-radius:4px;font-family:var(--mono);font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.04em;flex-shrink:0}
+.method.post{background:var(--post)}
+.method.get{background:var(--get)}
+.method.put{background:var(--put)}
+.method.delete{background:var(--delete)}
+.method.patch{background:var(--patch)}
+.path{font-family:var(--mono);font-size:13px;color:var(--text);background:var(--code-bg);padding:2px 8px;border-radius:4px;border:1px solid var(--border);word-break:break-all}
+.alias{font-family:var(--mono);font-size:12px;color:var(--muted);margin:2px 0 0 0;padding-left:54px}
+.purpose{color:var(--muted);margin:6px 0 10px;font-size:14px}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+@media (max-width:780px){.fields{grid-template-columns:1fr}.layout{grid-template-columns:1fr}aside.sidebar{position:static;height:auto}}
+.fields > div{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:10px 12px}
+.fields h4{margin:0 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.fields code{display:block;background:var(--code-bg);color:var(--text);padding:8px 10px;border-radius:4px;font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;background:var(--tag);color:var(--text);padding:2px 8px;border-radius:10px;font-family:var(--mono)}
+.tag.webhook{background:rgba(124,220,156,.15);color:var(--accent);border:1px solid rgba(124,220,156,.3)}
+.tag.scenario{background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3)}
+.tag.alias-tag{background:rgba(139,180,255,.15);color:var(--link);border:1px solid rgba(139,180,255,.3)}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:6px;padding:12px 14px;overflow-x:auto;margin:8px 0}
+pre code{background:none;padding:0}
+table{width:100%;border-collapse:collapse;margin:8px 0;font-size:13px}
+table th,table td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
+table th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+table td code{font-size:12px;background:var(--code-bg);padding:1px 5px;border-radius:3px}
+.box{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin:10px 0}
+.box.warn{border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.05)}
+.box.tip{border-color:rgba(124,220,156,.4);background:rgba(124,220,156,.05)}
+.k{color:var(--accent)}
+.s{color:#f59e0b}
+.c{color:var(--muted);font-style:italic}
+.empty-section{display:none}
+.hidden-by-filter{display:none !important}
+footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--border);color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <header>
+    <h1>CelcoinHomolog</h1>
+    <p>Referência de API simulada</p>
+  </header>
+  <input type="search" id="filter" placeholder="filtrar endpoints…" autocomplete="off">
+  <nav>
+    <div class="section-label">Geral</div>
+    <ul>
+      <li><a href="#intro">Visão geral</a></li>
+      <li><a href="#como-rodar">Como rodar</a></li>
+      <li><a href="#auth">Autenticação</a></li>
+      <li><a href="#cenarios">Cenários de teste</a></li>
+      <li><a href="#webhooks-overview">Webhooks (visão geral)</a></li>
+    </ul>
+    <div class="section-label">Endpoints</div>
+    <ul>
+      <li><a href="#pix-payment">PIX — Pagamento</a></li>
+      <li><a href="#pix-dict">PIX — DICT (chaves)</a></li>
+      <li><a href="#pix-qr">PIX — QR Code / EMV</a></li>
+      <li><a href="#boletos">Boletos</a></li>
+      <li><a href="#wallet">Wallet / Transferências</a></li>
+      <li><a href="#onboarding">Onboarding</a></li>
+      <li><a href="#account">Account Manager</a></li>
+      <li><a href="#webhook">Webhook Manager</a></li>
+      <li><a href="#relatorios">Relatórios / Conciliação</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<main>
+
+<section class="intro" id="intro">
+<h2>Referência de uso da API</h2>
+<p>Este documento descreve as rotas que o <strong>CelcoinHomolog</strong> simula. Use-o como referência durante a integração: cada endpoint traz método, path, propósito, shape do request e da resposta, webhook disparado (quando aplicável) e os <em>cenários de erro</em> que você pode acionar de forma determinística.</p>
+<p>O ambiente <strong>não</strong> conversa com a Celcoin real — todas as respostas são geradas localmente. Catálogo bruto de rotas: <a href="endpoints.md"><code>docs/endpoints.md</code></a> (fonte da verdade: <code>app/web.php</code>). Cenários de teste: <a href="scenarios.md"><code>docs/scenarios.md</code></a>.</p>
+</section>
+
+<section id="como-rodar">
+<h2>Como rodar</h2>
+<p>Stack: PHP puro sobre microframework próprio (<code>App\Core\*</code>), persistência em SQLite (<code>app/tmp/cslabs/cslabs.sqlite</code>), sem dependências de runtime.</p>
+<ul>
+  <li>Servir o diretório raiz como DocumentRoot com Apache + <code>.htaccess</code> (rewriting tudo para <code>index.php</code>).</li>
+  <li>Servidor embutido (<code>php -S</code>) <em>não</em> roteia sozinho — precisa de Apache (ou nginx replicando a regra).</li>
+  <li>Timezone fixado em <code>America/Sao_Paulo</code>. <code>DEV=true</code> em <code>app/config.php</code> liga <code>display_errors</code>.</li>
+  <li>Logs: <code>app/tmp/errors.log</code>.</li>
+  <li>Painel de inspeção de chamadas: <code>/shots/&lt;clientId&gt;/</code> (mostra request/response capturados).</li>
+</ul>
+</section>
+
+<section id="auth">
+<h2>Autenticação</h2>
+<p>Toda chamada autenticada usa o <em>access token</em> obtido em <code>POST /v5/token</code> no header <code>Authorization: Bearer &lt;token&gt;</code>. O mock aceita qualquer <code>client_id</code>/<code>client_secret</code> e emite um token persistido localmente (visível no painel <code>/shots</code>).</p>
+
+<article class="endpoint" data-method="post">
+<header>
+  <span class="method post">POST</span>
+  <code class="path">/v5/token</code>
+</header>
+<p class="purpose">Gerar token de acesso OAuth 2.0 (client_credentials).</p>
+<div class="fields">
+  <div><h4>Body</h4><code>{
+  "client_id": "...",
+  "client_secret": "...",
+  "grant_type": "client_credentials"
+}</code></div>
+  <div><h4>Response 200</h4><code>{
+  "access_token": "...",
+  "token_type": "bearer",
+  "expires_in": 3600
+}</code></div>
+</div>
+<div class="meta"><span class="tag">CSLAB400 se payload inválido</span></div>
+</article>
+</section>
+
+<section id="cenarios">
+<h2>Cenários de teste (magic values)</h2>
+<p>Para validar como seu app reage a cada retorno da Celcoin, há duas convenções universais — sem feature flag, sempre ativas:</p>
+
+<div class="box tip">
+<strong>1. Magic amount</strong> — em qualquer endpoint transacional, mande <code>amount</code> abaixo de R$ 1,00 para disparar um cenário pré-definido. Valores ≥ R$ 1,00 seguem o fluxo normal.
+</div>
+
+<table>
+<thead><tr><th>amount</th><th>cenário</th><th>HTTP</th><th>errorCode (PIX)</th><th>mensagem</th></tr></thead>
+<tbody>
+<tr><td><code>0,01</code></td><td>insufficient_funds</td><td>422</td><td>CBE301</td><td>Saldo insuficiente</td></tr>
+<tr><td><code>0,02</code></td><td>key_not_found</td><td>404</td><td>CBE189</td><td>Chave Pix não encontrada</td></tr>
+<tr><td><code>0,03</code></td><td>fraud</td><td>422</td><td>CBE171</td><td>Suspeita de fraude</td></tr>
+<tr><td><code>0,04</code></td><td>limit_exceeded</td><td>422</td><td>CBE410</td><td>Excede limite por transação</td></tr>
+<tr><td><code>0,05</code></td><td>blocked</td><td>403</td><td>CBE172</td><td>Conta bloqueada</td></tr>
+<tr><td><code>0,06</code></td><td>timeout</td><td>504</td><td>CBE504</td><td>Timeout do SPI</td></tr>
+<tr><td><code>0,07</code></td><td>bank_unavailable</td><td>503</td><td>CBE503</td><td>Banco destinatário indisponível</td></tr>
+<tr><td><code>0,08</code></td><td>duplicate</td><td>409</td><td>CBE100</td><td>Lançamento duplicado</td></tr>
+<tr><td><code>0,09</code></td><td>invalid_document</td><td>422</td><td>CBE007</td><td>CPF/CNPJ inválido</td></tr>
+<tr><td><code>0,10</code></td><td>daily_limit</td><td>422</td><td>CBE411</td><td>Limite diário excedido</td></tr>
+<tr><td><code>0,11</code></td><td>receiver_not_found</td><td>404</td><td>CBE405</td><td>Conta destinatária não localizada</td></tr>
+<tr><td><code>0,12</code></td><td>invalid_key</td><td>422</td><td>CBE190</td><td>Chave Pix inválida</td></tr>
+<tr><td><code>0,13</code></td><td>kyc_pending</td><td>403</td><td>CBE401</td><td>KYC pendente</td></tr>
+<tr><td><code>0,14</code></td><td>rate_limit</td><td>429</td><td>CBE429</td><td>Limite de requisições</td></tr>
+<tr><td><code>0,15</code></td><td>error</td><td>500</td><td>CBE500</td><td>Erro interno</td></tr>
+<tr><td><code>0,16</code></td><td>not_found</td><td>404</td><td>CBE404</td><td>Recurso não encontrado</td></tr>
+<tr><td><code>0,17</code></td><td>failed</td><td>400</td><td>CBE400</td><td>Rejeição genérica</td></tr>
+</tbody>
+</table>
+
+<div class="box tip">
+<strong>2. Convenção da chave PIX</strong> — para endpoints sem <code>amount</code> (DICT, onboarding, account/check), trechos na chave PIX disparam cenário: <code>erro@</code>/<code>error@</code>/<code>500@</code> → error · <code>falha@</code>/<code>failed@</code> → failed · <code>fraude@</code>/<code>fraud@</code>/<code>suspeita@</code> → fraud · <code>404@</code>/<code>notfound@</code>/<code>inexistente@</code> → not_found · <code>bloqueado@</code>/<code>blocked@</code> → blocked.
+</div>
+
+<p>Detalhes e internals em <a href="scenarios.md"><code>docs/scenarios.md</code></a>.</p>
+</section>
+
+<section id="webhooks-overview">
+<h2>Webhooks (visão geral)</h2>
+<p>Após cada operação assíncrona, o mock dispara um webhook para a URL registrada em <code>POST /baas-webhookmanager/v1/webhook/subscription</code> para a respectiva <em>entity</em>. A entrega acontece <strong>fora do lifecycle</strong> da request via worker spawnado por <code>exec</code> — funciona em qualquer SAPI (php -S, mod_php, FPM).</p>
+<p><strong>Envelope padrão:</strong></p>
+<pre><code>{
+  "id": "wh_…",
+  "webhookId": "&lt;subscriptionId&gt;",
+  "entity": "pix-payment-out",
+  "createTimeStamp": "2026-05-28T14:32:11-03:00",
+  "status": "CONFIRMED",
+  "body": { … payload específico … }
+}</code></pre>
+<p>O campo do timestamp varia: <code>createTimeStamp</code> (S maiúsculo) para <code>pix-payment-out</code>, <code>pix-payment-in</code>, <code>spb-transfer-in</code>, <code>spb-reversal-in</code>, <code>spb-reversal-out</code>; <code>createTimestamp</code> (s minúsculo) para os demais.</p>
+<p>Entidades mapeadas: <code>pix-payment-out</code>, <code>pix-reversal-out</code>, <code>spb-transfer-out</code>, <code>internal-transfer-out</code>, <code>billpayment</code>, <code>charge-create</code>, <code>onboarding-create</code>, <code>onboarding-proposal</code>, <code>kyc</code>, <code>account-status</code>, <code>launch-debit</code>, <code>launch-credit</code>.</p>
+<p>Dispatch manual (debug): <code>POST /cslabs/webhook/dispatch</code> com <code>{entity, status?, body?, delaySeconds?}</code>.</p>
+</section>
+
+<!-- ========================= PIX PAYMENT ========================= -->
+<section class="domain" id="pix-payment">
+<h2>PIX — Pagamento</h2>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas/v2/pix/payment</code></header>
+<p class="alias">alias: /baas-wallet-transactions-webservice/v1/pix/payment · /pix/v1/payment</p>
+<p class="purpose">Enviar PIX (DICT ou SPB). Persiste em <code>pix_payments</code> e dispara webhook <code>pix-payment-out</code>.</p>
+<div class="fields">
+<div><h4>Body (request)</h4><code>{
+  "amount": 150.00,
+  "clientCode": "PIX-001",
+  "initiationType": "DICT",
+  "paymentType": "IMMEDIATE",
+  "urgency": "HIGH",
+  "transactionType": "TRANSFER",
+  "debitParty": { "account": "1234567" },
+  "creditParty": { "account": "9876543", "key": "user@example.com" },
+  "endToEndId": "E13935893202605281032ABCDEFGHIJK",
+  "remittanceInformation": "Pagamento NF 12345"
+}</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "transactionId": "pix_<sha>",
+  "clientRequestId": "...",
+  "amount": 150.00,
+  "endToEndId": "E13935893…",
+  "message": "Pix recebido com sucesso.",
+  "version": "1.0.0"
+}</code></div>
+</div>
+<div class="meta">
+<span class="tag webhook">webhook: pix-payment-out</span>
+<span class="tag scenario">magic-amount</span>
+<span class="tag">chave: erro@/fraude@/…</span>
+</div>
+<p class="purpose"><code>endToEndId</code> é preservado se enviado pelo cliente (DICT lookup); gerado em formato SPI quando ausente.</p>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas/v2/pix/payment/status</code></header>
+<p class="alias">alias: /baas-wallet-transactions-webservice/v1/pix/payment/status</p>
+<p class="purpose">Consultar status de PIX enviado.</p>
+<div class="fields">
+<div><h4>Query</h4><code>?clientCode=PIX-001
+?endToEndId=E13935893…
+?id=pix_…</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "CONFIRMED",
+  "version": "1.0.0",
+  "body": {
+    "id": "pix_…",
+    "amount": 150.00,
+    "clientCode": "PIX-001",
+    "endToEndId": "E13935893…"
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag">404 se id não encontrado</span></div>
+<p class="purpose">Após 2s o status muda de <code>PROCESSING</code> para <code>CONFIRMED</code> automaticamente.</p>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/pix/v1/payment/pi/status</code></header>
+<p class="alias">alias: /pix/v1/receivement/status</p>
+<p class="purpose">Status PIX (versão v1 legada).</p>
+<div class="fields">
+<div><h4>Query</h4><code>?transactionId=pix_…
+?endtoendId=E13935893…</code></div>
+<div><h4>Response 200</h4><code>{
+  "transactionId": "…",
+  "endToEndId": "…",
+  "amount": 150.00,
+  "status": "CONFIRMED"
+}</code></div>
+</div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas-wallet-transactions-webservice/v1/pix/reverse</code></header>
+<p class="purpose">Devolução (estorno) de PIX recebido. Dispara webhook <code>pix-reversal-out</code>.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "id": "pix_…",
+  "amount": 50.00,
+  "clientCode": "REV-001",
+  "reason": "Cobrança duplicada",
+  "endToEndId": "E13935893…"
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "id": "rev_…",
+    "amount": 50.00,
+    "returnIdentification": "D13935893…",
+    "endToEndId": "E13935893…",
+    "status": "PROCESSING"
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: pix-reversal-out</span><span class="tag scenario">magic-amount</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/pix/v2/reverse/pi/{transactionId}</code></header>
+<p class="purpose">Devolução PIX (legado, transactionId em path).</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "amount": 50.00,
+  "reason": "..."
+}</code></div>
+<div><h4>Response 201</h4><code>{ "status": "SUCCESS", "body": { ... } }</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: pix-reversal-out</span></div>
+</article>
+
+</section>
+
+<!-- ========================= PIX DICT ========================= -->
+<section class="domain" id="pix-dict">
+<h2>PIX — DICT (chaves)</h2>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas/v2/pix/dict/entry/external/{account}</code></header>
+<p class="alias">alias: /celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/external/{account}</p>
+<p class="purpose">Consulta DICT (resolução de chave). <code>endtoEndId</code> agora é gerado por chamada (não-determinístico, formato SPI real).</p>
+<div class="fields">
+<div><h4>Query</h4><code>?key=eskelsen@yahoo.com
+?ownerTaxId=06170097914   (opcional)</code></div>
+<div><h4>Response 200</h4><code>{
+  "endtoEndId": "E13935893…",
+  "key": "eskelsen@yahoo.com",
+  "keyType": "email",
+  "owner": { "name": "Daniel Eskelsen", "documentNumber": "06170097914" },
+  "account": {
+    "account": "123456",
+    "participant": "487",
+    "branch": "0001",
+    "accountType": "N"
+  },
+  "description": "CONSULTA COM SUCESSO."
+}</code></div>
+</div>
+<div class="meta"><span class="tag">chave: erro@/fraude@/404@/bloqueado@</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/pix/v1/dict/v2/key</code></header>
+<p class="purpose">Consulta DICT (versão v1 legada). Mesmo shape do v2.</p>
+<div class="fields">
+<div><h4>Query</h4><code>?key=…&payerId=…</code></div>
+<div><h4>Response</h4><code>{ owner, account, keyType, … }</code></div>
+</div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry</code></header>
+<p class="purpose">Registrar chave PIX para uma conta do mock.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "keyType": "EMAIL",
+  "key": "user@example.com",
+  "account": { "branch": "0001", "account": "123456", "accountType": "TRAN" },
+  "owner": { "type": "NATURAL_PERSON", "taxId": "06170097914", "name": "..." }
+}</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "CONFIRMED",
+  "body": {
+    "keyType": "EMAIL",
+    "key": "user@example.com",
+    "account": { ... },
+    "owner": { ... },
+    "creationDate": "2026-05-28T…"
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag">CBE189 se duplicada</span><span class="tag">CBE345 se KYC pendente</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method delete">DELETE</span><code class="path">/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/{key}</code></header>
+<p class="purpose">Excluir chave PIX.</p>
+<div class="fields">
+<div><h4>Path</h4><code>{key} — chave a remover</code></div>
+<div><h4>Response 200</h4><code>{ "status": "CONFIRMED", "body": { "key": "…", "deletedAt": "…" } }</code></div>
+</div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/{account}</code></header>
+<p class="purpose">Listar chaves de uma conta.</p>
+<div class="fields">
+<div><h4>Path</h4><code>{account} — número da conta</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": { "keys": [ { "keyType": "...", "key": "...", "creationDate": "..." }, ... ] }
+}</code></div>
+</div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/celcoin-baas-pix-dict-webservice/v1/pix/dict/claim</code></header>
+<p class="purpose">Abrir claim (disputa/portabilidade) de uma chave.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "claimType": "OWNERSHIP" | "PORTABILITY",
+  "key": "...",
+  "account": { "branch": "0001", "account": "123456" }
+}</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "OPEN",
+  "body": { "claimId": "...", "claimType": "...", "key": "...", "status": "OPEN" }
+}</code></div>
+</div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/celcoin-baas-pix-dict-webservice/v1/pix/dict/claim/confirm</code></header>
+<p class="purpose">Confirmar claim.</p>
+<div class="fields"><div><h4>Body</h4><code>{ "claimId": "..." }</code></div><div><h4>Response</h4><code>{ "status": "CONFIRMED", "body": { ... } }</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/celcoin-baas-pix-dict-webservice/v1/pix/dict/claim/cancel</code></header>
+<p class="purpose">Cancelar claim aberta.</p>
+<div class="fields"><div><h4>Body</h4><code>{ "claimId": "..." }</code></div><div><h4>Response</h4><code>{ "status": "CANCELLED", "body": { ... } }</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/celcoin-baas-pix-dict-webservice/v1/pix/dict/claim/list</code></header>
+<p class="purpose">Listar claims (filtros opcionais).</p>
+<div class="fields"><div><h4>Query</h4><code>?status=OPEN&limit=50&offset=0</code></div><div><h4>Response</h4><code>{ "status": "SUCCESS", "body": { "claims": [ ... ] } }</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/celcoin-baas-pix-dict-webservice/v1/pix/dict/claim/{id}</code></header>
+<p class="purpose">Consultar claim por id.</p>
+</article>
+
+</section>
+
+<!-- ========================= PIX QR ========================= -->
+<section class="domain" id="pix-qr">
+<h2>PIX — QR Code / EMV</h2>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/pix/v1/brcode/static</code></header>
+<p class="purpose">Criar QR Code estático (mesma string a cada uso).</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "amount": 100.00,
+  "key": "user@example.com",
+  "merchant": { "name": "Loja Demo", "city": "SAO PAULO" },
+  "additionalInformation": "Pedido 123",
+  "transactionId": "TXID20260528001"
+}</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "transactionId": "TXID...",
+    "emv": "00020126...6304ABCD",
+    "imageBase64": "data:image/png;base64,..."
+  }
+}</code></div>
+</div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/pix/v1/brcode/dynamic</code></header>
+<p class="alias">alias: /pix/v1/collection/immediate</p>
+<p class="purpose">Criar QR Code dinâmico (cobrança imediata com expiração).</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "amount": 100.00,
+  "key": "user@example.com",
+  "expiration": 3600,
+  "additionalInformation": "..."
+}</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "ACTIVE",
+  "body": {
+    "transactionId": "TXID…",
+    "location": "https://…/payload/…",
+    "locationId": "…",
+    "emv": "00020126…",
+    "imageBase64": "data:image/png;base64,…"
+  }
+}</code></div>
+</div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/pix/v1/brcode/static/{transactionId}/base64</code></header>
+<p class="purpose">Obter QR estático em base64.</p>
+<div class="fields"><div><h4>Path</h4><code>{transactionId}</code></div><div><h4>Response</h4><code>{ "imageBase64": "data:image/png;base64,..." }</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/pix/v1/location/{locationId}/base64</code></header>
+<p class="purpose">Imagem da location de um QR dinâmico.</p>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/pix/v1/emv</code></header>
+<p class="purpose">Decodificar string EMV (BR Code) e devolver dados estruturados.</p>
+<div class="fields"><div><h4>Body</h4><code>{ "emv": "00020126...6304ABCD" }</code></div><div><h4>Response</h4><code>{
+  "status": "SUCCESS",
+  "body": { "amount": 100.00, "key": "...", "merchant": { ... }, "transactionIdentification": "..." }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/pix/v1/collection/immediate/payload/{payload}</code></header>
+<p class="alias">alias: /pix/v1/collection/duedate/payload/{payload}</p>
+<p class="purpose">Consultar payload da cobrança a partir da location URL.</p>
+<div class="fields"><div><h4>Path</h4><code>{payload} — id ou hash do payload</code></div><div><h4>Response</h4><code>{
+  "status": "ACTIVE",
+  "txid": "TXID…",
+  "chave": "…",
+  "valor": { "original": "100.00", ... }
+}</code></div></div>
+</article>
+
+</section>
+
+<!-- ========================= BOLETOS ========================= -->
+<section class="domain" id="boletos">
+<h2>Boletos</h2>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/v5/transactions/billpayments/authorize</code></header>
+<p class="purpose">Consultar/autorizar pagamento de boleto a partir da linha digitável (operação <code>consultaPagamentos</code>).</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "barCode": {
+    "type": 1,            // 1=arrecadação, 2=cobrança
+    "digitable": "846700000004 7..."
+  }
+}</code></div>
+<div><h4>Response 200</h4><code>{
+  "transactionId": 1234567890,
+  "assignor": "BANCO ITAU S.A.",
+  "value": 125.50,
+  "dueDate": "2026-06-10T00:00:00Z",
+  "settleDate": "29/05/2026",
+  "digitable": "...",
+  "type": 1,
+  "status": 0,
+  "errorCode": "000"
+}</code></div>
+</div>
+<div class="meta"><span class="tag scenario">magic-amount</span><span class="tag">CSLAB404 se linha não localizada</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas/v2/billpayment</code></header>
+<p class="purpose">Efetuar pagamento de boleto após <code>authorize</code>. Dispara webhook <code>billpayment</code>.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "clientRequestId": "BP-001",
+  "transactionIdAuthorize": 1234567890,
+  "account": "123456",
+  "amount": 125.50,
+  "barCodeInfo": { "digitable": "..." }
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "status": "PROCESSING",
+  "version": "1.1.0",
+  "body": {
+    "id": "...",
+    "clientRequestId": "BP-001",
+    "amount": 125.50,
+    "transactionIdAuthorize": 1234567890,
+    "barCodeInfo": { "digitable": "..." }
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: billpayment</span><span class="tag scenario">magic-amount</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas/v2/billpayment/status</code></header>
+<p class="purpose">Status de pagamento de boleto.</p>
+<div class="fields">
+<div><h4>Query</h4><code>?Id=… ou ?ClientRequestId=BP-001</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "CONFIRMED",
+  "body": {
+    "id": "...",
+    "amount": 125.50,
+    "account": "123456",
+    "transactionIdAuthorize": 1234567890,
+    "status": "CONFIRMED"
+  }
+}</code></div>
+</div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/api-integration-baas-webservice/v1/charge</code></header>
+<p class="purpose">Emitir boleto de cobrança (Boleto + Pix híbrido). Dispara webhook <code>charge-create</code>.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "externalId": "CHG-001",
+  "amount": 250.00,
+  "duedate": "2026-06-15",
+  "key": "user@example.com",
+  "debtor": {
+    "name": "Cliente Demo",
+    "documentNumber": "12345678901"
+  },
+  "receiver": { "account": "987654" },
+  "instructions": "...",
+  "split": [...]
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "transactionId": "…",
+    "externalId": "CHG-001",
+    "amount": 250.00,
+    "barCode": "84670000000…",
+    "bankLine": "8467.00000 …",
+    "boleto": { "transactionId": "…", "bankNumber": "…" }
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: charge-create</span><span class="tag scenario">magic-amount</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas/v2/charge</code></header>
+<p class="purpose">Consultar boleto emitido.</p>
+<div class="fields"><div><h4>Query</h4><code>?TransactionId=… ou ?ExternalId=CHG-001</code></div><div><h4>Response 200</h4><code>{
+  "status": "PENDING" | "PAID" | "CANCELLED",
+  "body": { "transactionId": "...", "amount": 250.00, "duedate": "...", "boleto": { ... } }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method delete">DELETE</span><code class="path">/baas/v2/charge/{txid}</code></header>
+<p class="purpose">Cancelar cobrança.</p>
+<div class="fields"><div><h4>Path</h4><code>{txid}</code></div><div><h4>Response 200</h4><code>{ "status": "CANCELLED", "body": { ... } }</code></div></div>
+</article>
+
+</section>
+
+<!-- ========================= WALLET ========================= -->
+<section class="domain" id="wallet">
+<h2>Wallet / Transferências</h2>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/v5/merchant/balance</code></header>
+<p class="purpose">Saldo do merchant (versão legada).</p>
+<div class="fields"><div><h4>Query</h4><code>—</code></div><div><h4>Response 200</h4><code>{
+  "balance": 19814.54,
+  "blocked": 0,
+  "version": "1.0.0"
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas-walletreports/v1/wallet/balance</code></header>
+<p class="purpose">Saldo da carteira por documento.</p>
+<div class="fields"><div><h4>Query</h4><code>?DocumentNumber=12345678901</code></div><div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "documentNumber": "12345678901",
+    "amount": 19814.54,
+    "blocked": 0,
+    "availableBalance": 19814.54,
+    "createDate": "2026-05-28T…"
+  }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas-wallet-transactions-webservice/v1/wallet/internal/transfer</code></header>
+<p class="purpose">Transferência interna (entre contas do mesmo BaaS). Dispara webhook <code>internal-transfer-out</code>.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "amount": 200.00,
+  "clientRequestId": "IT-001",
+  "debitParty": { "account": "123456" },
+  "creditParty": { "account": "987654" },
+  "description": "Transferência interna"
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "transactionId": "…",
+  "clientRequestId": "IT-001",
+  "status": "PROCESSING",
+  "amount": 200.00,
+  "message": "Transferência interna recebida com sucesso."
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: internal-transfer-out</span><span class="tag scenario">magic-amount</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas-wallet-transactions-webservice/v1/wallet/internal/transfer/status</code></header>
+<p class="purpose">Status da transferência interna.</p>
+<div class="fields"><div><h4>Query</h4><code>?ClientRequestId=IT-001</code></div><div><h4>Response 200</h4><code>{
+  "status": "CONFIRMED",
+  "body": {
+    "transactionId": "…",
+    "amount": 200.00,
+    "endToEndId": "…",
+    "debitParty": { ... },
+    "creditParty": { ... }
+  }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas-wallet-transactions-webservice/v1/spb/transfer</code></header>
+<p class="purpose">Transferência SPB / TED. Dispara webhook <code>spb-transfer-out</code>.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "amount": 500.00,
+  "clientCode": "SPB-001",
+  "description": "TED",
+  "clientFinality": "10",
+  "debitParty": { "account": "123456" },
+  "creditParty": {
+    "account": "654321",
+    "branch": "0001",
+    "bank": "341",
+    "documentNumber": "12345678901",
+    "name": "Destinatário"
+  }
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "status": "PROCESSING",
+  "version": "1.0.0",
+  "body": {
+    "id": "…",
+    "amount": 500.00,
+    "clientCode": "SPB-001",
+    "debitParty": { ... },
+    "creditParty": { ... }
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: spb-transfer-out</span><span class="tag scenario">magic-amount</span><span class="tag">CBE100 se duplicada</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas-wallet-transactions-webservice/v1/spb/transfer</code></header>
+<p class="purpose">Status de SPB por <code>clienteCode</code>.</p>
+<div class="fields"><div><h4>Query</h4><code>?clienteCode=SPB-001</code></div><div><h4>Response 200</h4><code>{ "status": "CONFIRMED", "version": "1.0.0", "body": { ... } }</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas-wallet-transactions-webservice/v1/wallet/entry/{account}</code></header>
+<p class="purpose">Lançamento manual em conta (CREDIT ou DEBIT). Dispara webhook <code>launch-debit</code> ou <code>launch-credit</code>.</p>
+<div class="fields">
+<div><h4>Path + Body</h4><code>{account} em path
+
+{
+  "type": "CREDIT" | "DEBIT",
+  "amount": 100.00,
+  "clientCode": "WE-001",
+  "description": "Ajuste manual"
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "status": "PROCESSING",
+  "body": {
+    "id": "…",
+    "account": "123456",
+    "type": "CREDIT",
+    "amount": 100.00,
+    "createdAt": "…"
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: launch-credit / launch-debit</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas/v2/wallet/movement</code></header>
+<p class="alias">alias: /baas-walletreports/v1/wallet/movement</p>
+<p class="purpose">Extrato de movimentação da conta.</p>
+<div class="fields"><div><h4>Query</h4><code>?DocumentNumber=…&StartDate=2026-05-01&EndDate=2026-05-28&Limit=50&Offset=0</code></div><div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "items": [
+      { "id": "…", "type": "CREDIT", "amount": 100.00, "balance": …, "date": "…", "description": "…" },
+      …
+    ],
+    "totalItems": …
+  }
+}</code></div></div>
+</article>
+
+</section>
+
+<!-- ========================= ONBOARDING ========================= -->
+<section class="domain" id="onboarding">
+<h2>Onboarding</h2>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas-onboarding/v1/account/natural-person/create</code></header>
+<p class="purpose">Criar conta PF. Dispara webhook <code>onboarding-create</code> ao confirmar.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "clientCode": "ONB-PF-001",
+  "documentNumber": "06170097914",
+  "phoneNumber": "+5511999990000",
+  "email": "user@example.com",
+  "motherName": "Mãe do Cliente",
+  "fullName": "Cliente Demo",
+  "birthDate": "1990-01-15",
+  "address": {
+    "postalCode": "01310100",
+    "street": "Av. Paulista",
+    "number": "1000",
+    "neighborhood": "Bela Vista",
+    "city": "São Paulo",
+    "state": "SP"
+  }
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "status": "PROCESSING",
+  "body": {
+    "proposalId": "ob_…",
+    "clientCode": "ONB-PF-001",
+    "documentNumber": "06170097914",
+    "account": { "branch": "0001", "account": "…", "accountDigit": "…" }
+  }
+}</code></div>
+</div>
+<div class="meta">
+<span class="tag webhook">webhook: onboarding-create</span>
+<span class="tag">CBE022/CBE025/CBE007/CBE023/CBE024 — duplicidade (documentNumber/clientCode/email/phone)</span>
+</div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas-onboarding/v1/account/business/create</code></header>
+<p class="purpose">Criar conta PJ.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "clientCode": "ONB-PJ-001",
+  "documentNumber": "12345678000190",
+  "contactNumber": "+5511988887777",
+  "businessEmail": "contato@empresa.com",
+  "businessName": "Empresa Demo LTDA",
+  "tradingName": "Empresa Demo",
+  "legalRepresentative": { ... },
+  "address": { ... }
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "status": "PROCESSING",
+  "body": {
+    "proposalId": "ob_…",
+    "documentNumber": "12345678000190",
+    "account": { ... }
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: onboarding-create</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas-onboarding/v1/account/natural-person/create/bulk</code></header>
+<p class="alias">alias: /baas-onboarding/v1/account/natural-person/bulk · /baas-onboarding/v1/account/business/create/bulk</p>
+<p class="purpose">Onboarding em lote (PF ou PJ — detectado pelo URI).</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "items": [
+    { … objeto idêntico ao create individual … },
+    …
+  ]
+}</code></div>
+<div><h4>Response 207</h4><code>{
+  "status": "PROCESSING",
+  "body": {
+    "items": [
+      { "clientCode": "...", "status": "PROCESSING", "proposalId": "..." },
+      { "clientCode": "...", "status": "ERROR",      "error": { "errorCode": "CBE022", "message": "..." } }
+    ]
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: onboarding-create (por item aceito)</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas-onboarding/v1/account/check</code></header>
+<p class="purpose">Verificar status de onboarding. Retorna <code>body.account.{branch,account,name,documentNumber}</code> quando CONFIRMED.</p>
+<div class="fields"><div><h4>Query</h4><code>?clientCode=ONB-PF-001
+?documentNumber=06170097914
+?proposalId=ob_…</code></div><div><h4>Response 200</h4><code>{
+  "status": "CONFIRMED",
+  "body": {
+    "proposalId": "ob_…",
+    "account": {
+      "branch": "0001",
+      "account": "…",
+      "name": "Cliente Demo",
+      "documentNumber": "06170097914"
+    }
+  }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/onboarding/v1/onboarding-proposal/natural-person</code></header>
+<p class="purpose">Proposta de onboarding PF (KYC moderno com webview).</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "clientCode": "PROP-001",
+  "documentNumber": "06170097914",
+  "email": "user@example.com",
+  "phoneNumber": "+5511999990000",
+  "onboardingType": "BAAS"
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "status": "PROCESSING",
+  "body": {
+    "proposalId": "prop_…",
+    "clientCode": "PROP-001",
+    "proposalStatus": "CREATED",
+    "webviewUrl": "https://…/onboarding/prop_…"
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: onboarding-proposal</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/onboarding/v1/onboarding-proposal/legal-person</code></header>
+<p class="purpose">Proposta de onboarding PJ.</p>
+<div class="fields"><div><h4>Body</h4><code>{ … fields similares a PJ create … }</code></div><div><h4>Response 201</h4><code>{ "status": "PROCESSING", "body": { "proposalId": "...", "webviewUrl": "..." } }</code></div></div>
+<div class="meta"><span class="tag webhook">webhook: onboarding-proposal</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/onboarding/v1/onboarding-proposal</code></header>
+<p class="purpose">Listar propostas com filtros.</p>
+<div class="fields"><div><h4>Query</h4><code>?clientCode=…&documentNumber=…&status=…&limit=50&offset=0</code></div><div><h4>Response 200</h4><code>{ "status": "SUCCESS", "body": { "items": [ ... ], "totalItems": N } }</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/celcoinkyc/document/v1/fileupload</code></header>
+<p class="purpose">Upload de documento KYC (multipart/form-data). <em>Endpoint legado, descontinuado em 2025-04-29, mantido para consumidores legados.</em></p>
+<div class="fields">
+<div><h4>Multipart fields</h4><code>file: &lt;binary&gt;
+fileType: RG | CPF | SELFIE | CNH | PROOF_ADDRESS
+documentNumber: 06170097914
+onboardingId: ob_…</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "fileId": "...",
+    "documentNumber": "06170097914",
+    "fileType": "RG",
+    "createDate": "..."
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag webhook">webhook: kyc</span></div>
+</article>
+
+</section>
+
+<!-- ========================= ACCOUNT MANAGER ========================= -->
+<section class="domain" id="account">
+<h2>Account Manager</h2>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas-accountmanager/v1/account/fetch</code></header>
+<p class="purpose">Buscar dados completos de uma conta PF.</p>
+<div class="fields"><div><h4>Query</h4><code>?DocumentNumber=06170097914
+ou ?Account=…</code></div><div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "documentNumber": "06170097914",
+    "account": { "branch": "0001", "account": "…", "status": "ATIVO" },
+    "owner": { "name": "…", "phoneNumber": "…", "email": "…" },
+    "createDate": "…"
+  }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas-accountmanager/v1/account/fetch-business</code></header>
+<p class="purpose">Buscar dados completos de uma conta PJ.</p>
+</article>
+
+<article class="endpoint">
+<header><span class="method put">PUT</span><code class="path">/baas-accountmanager/v1/account/status</code></header>
+<p class="purpose">Atualizar status da conta. Dispara webhook <code>account-status</code>.</p>
+<div class="fields">
+<div><h4>Query + Body</h4><code>?Account=123456
+
+{
+  "status": "ATIVO" | "BLOQUEADO",
+  "reason": "Texto descritivo"
+}</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": { "account": "123456", "status": "BLOQUEADO", "reason": "..." }
+}</code></div>
+</div>
+<div class="meta"><span class="tag">CBE345 se KYC pendente</span><span class="tag webhook">webhook: account-status</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method put">PUT</span><code class="path">/baas-accountmanager/v1/account/natural-person</code></header>
+<p class="purpose">Atualizar dados cadastrais de PF.</p>
+<div class="fields"><div><h4>Query + Body</h4><code>?Account=123456
+
+{
+  "fullName": "...",
+  "email": "...",
+  "phoneNumber": "...",
+  "address": { ... }
+}</code></div><div><h4>Response 200</h4><code>{ "status": "SUCCESS", "body": { ... } }</code></div></div>
+<div class="meta"><span class="tag">CBE352 se KYC pendente</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method put">PUT</span><code class="path">/baas-accountmanager/v1/account/business</code></header>
+<p class="purpose">Atualizar dados cadastrais de PJ.</p>
+</article>
+
+<article class="endpoint">
+<header><span class="method delete">DELETE</span><code class="path">/baas-accountmanager/v1/account/close</code></header>
+<p class="purpose">Encerrar conta.</p>
+<div class="fields"><div><h4>Query + Body</h4><code>?Account=123456
+
+{ "reason": "Solicitação do cliente" }</code></div><div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": { "account": "123456", "status": "ENCERRADA", "closedAt": "..." }
+}</code></div></div>
+</article>
+
+</section>
+
+<!-- ========================= WEBHOOK MANAGER ========================= -->
+<section class="domain" id="webhook">
+<h2>Webhook Manager</h2>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas-webhookmanager/v1/webhook/subscription</code></header>
+<p class="purpose">Listar assinaturas de webhook.</p>
+<div class="fields"><div><h4>Query</h4><code>?Entity=pix-payment-out
+?Active=true</code></div><div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "items": [
+      {
+        "subscriptionId": "...",
+        "entity": "pix-payment-out",
+        "webhookUrl": "https://app.exemplo.com/webhook",
+        "auth": { "type": "BEARER", "token": "..." },
+        "active": true,
+        "createDate": "..."
+      }
+    ]
+  }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/baas-webhookmanager/v1/webhook/subscription</code></header>
+<p class="purpose">Registrar nova assinatura.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "entity": "pix-payment-out",
+  "webhookUrl": "https://app.exemplo.com/webhook/pix",
+  "auth": { "type": "BEARER", "token": "..." },
+  "active": true
+}</code></div>
+<div><h4>Response 201</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "subscriptionId": "...",
+    "entity": "pix-payment-out",
+    "webhookUrl": "...",
+    "active": true
+  }
+}</code></div>
+</div>
+<div class="meta"><span class="tag">CSLAB422 se entity/url inválidos</span></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method put">PUT</span><code class="path">/baas-webhookmanager/v1/webhook/subscription</code></header>
+<p class="purpose">Atualizar assinatura existente.</p>
+</article>
+
+<article class="endpoint">
+<header><span class="method delete">DELETE</span><code class="path">/baas-webhookmanager/v1/webhook/subscription/{entity}</code></header>
+<p class="purpose">Remover assinatura por entity.</p>
+</article>
+
+<article class="endpoint">
+<header><span class="method post">POST</span><code class="path">/cslabs/webhook/dispatch</code></header>
+<p class="purpose">Disparar webhook manualmente (debug/teste). Não-Celcoin — rota administrativa.</p>
+<div class="fields">
+<div><h4>Body</h4><code>{
+  "entity": "pix-payment-out",
+  "status": "CONFIRMED",
+  "body": { ... payload arbitrário ... },
+  "delaySeconds": 2,
+  "webhookUrl": "https://override.exemplo.com"
+}</code></div>
+<div><h4>Response 200</h4><code>{
+  "status": "OK",
+  "body": { "entity": "...", "webhookUrl": "...", "delaySeconds": 2 }
+}</code></div>
+</div>
+</article>
+
+</section>
+
+<!-- ========================= RELATÓRIOS ========================= -->
+<section class="domain" id="relatorios">
+<h2>Relatórios / Conciliação</h2>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/baas/v2/account/income-report</code></header>
+<p class="purpose">Informe de rendimentos (PDF base64).</p>
+<div class="fields"><div><h4>Query</h4><code>?DocumentNumber=…&Year=2025</code></div><div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "documentNumber": "...",
+    "year": 2025,
+    "report": "data:application/pdf;base64,..."
+  }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/tools-conciliation/v1/ConsolidatedStatement</code></header>
+<p class="purpose">Extrato consolidado (campos em PT-BR).</p>
+<div class="fields"><div><h4>Query</h4><code>?DocumentNumber=…&StartDate=…&EndDate=…</code></div><div><h4>Response 200</h4><code>{
+  "Status": "SUCESSO",
+  "Body": {
+    "DataInicial": "...",
+    "DataFinal": "...",
+    "Lancamentos": [
+      { "Data": "...", "Tipo": "...", "Valor": ..., "Descricao": "..." }
+    ]
+  }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/tools-conciliation/v1/exportfile/types</code></header>
+<p class="purpose">Dicionário de tipos de arquivo exportável.</p>
+<div class="fields"><div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "types": [
+      { "name": "CSV", "description": "..." },
+      { "name": "OFX", "description": "..." },
+      { "name": "XLSX", "description": "..." }
+    ]
+  }
+}</code></div></div>
+</article>
+
+<article class="endpoint">
+<header><span class="method get">GET</span><code class="path">/tools-conciliation/v1/exportfile</code></header>
+<p class="purpose">Exportar arquivo de extrato/conciliação por <code>filetype</code> + data.</p>
+<div class="fields"><div><h4>Query</h4><code>?DocumentNumber=…&StartDate=…&EndDate=…&FileType=CSV</code></div><div><h4>Response 200</h4><code>{
+  "status": "SUCCESS",
+  "body": {
+    "fileType": "CSV",
+    "content": "data:text/csv;base64,...",
+    "createDate": "..."
+  }
+}</code></div></div>
+</article>
+
+</section>
+
+<footer>
+<p>Fonte da verdade: <a href="../app/web.php"><code>app/web.php</code></a>. Para divergências entre este doc e o código, vale o código — atualize este HTML.</p>
+<p>Catálogo bruto: <a href="endpoints.md">endpoints.md</a> · Cenários de teste: <a href="scenarios.md">scenarios.md</a> · Arquitetura: <a href="architecture.md">architecture.md</a> · Convenções: <a href="conventions.md">conventions.md</a></p>
+</footer>
+
+</main>
+</div>
+
+<script>
+(function(){
+  const filter = document.getElementById('filter');
+  const all = Array.from(document.querySelectorAll('article.endpoint'));
+  const sections = Array.from(document.querySelectorAll('section.domain'));
+  filter.addEventListener('input', () => {
+    const q = filter.value.toLowerCase().trim();
+    if (!q) {
+      all.forEach(e => e.classList.remove('hidden-by-filter'));
+      sections.forEach(s => s.classList.remove('empty-section'));
+      return;
+    }
+    all.forEach(e => {
+      const hit = e.textContent.toLowerCase().includes(q);
+      e.classList.toggle('hidden-by-filter', !hit);
+    });
+    sections.forEach(s => {
+      const any = Array.from(s.querySelectorAll('article.endpoint')).some(e => !e.classList.contains('hidden-by-filter'));
+      s.classList.toggle('empty-section', !any);
+    });
+  });
+})();
+</script>
+</body>
+</html>
