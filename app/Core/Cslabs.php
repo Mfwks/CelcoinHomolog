@@ -452,7 +452,7 @@ class Cslabs
         $account = self::accountNumberFromSeed($key . '|' . $document);
 
         return [
-            'endtoEndId' => 'E' . date('Ymd') . substr(hash('sha256', $key), 0, 24),
+            'endtoEndId' => self::generateEndToEndId(),
             'owner' => [
                 'name' => strlen($document) === 14 ? 'Empresa Homologacao Celcoin' : 'Daniel Eskelsen',
                 'documentNumber' => $document,
@@ -524,7 +524,7 @@ class Cslabs
             'transactionId' => $transactionId,
             'clientRequestId' => $clientRequestId,
             'amount' => round($amount, 2),
-            'endToEndId' => 'E' . date('Ymd') . substr(hash('sha256', $transactionId), 0, 24),
+            'endToEndId' => trim((string) ($payload['endToEndId'] ?? '')) ?: self::generateEndToEndId(),
             'message' => 'Pix recebido com sucesso.',
             'version' => '1.0.0',
         ];
@@ -610,7 +610,7 @@ class Cslabs
             return self::paymentError('failed');
         }
 
-        $endToEndId = trim((string) ($payload['endToEndId'] ?? '')) ?: ('E13935893' . date('YmdHi') . substr(hash('sha256', $id), 0, 11));
+        $endToEndId = trim((string) ($payload['endToEndId'] ?? '')) ?: self::generateEndToEndId();
         $returnIdentification = 'D13935893' . date('Ymd') . substr(hash('sha256', $id . '-ret'), 0, 11);
 
         return [
@@ -2251,6 +2251,19 @@ class Cslabs
     private static function accountNumberFromSeed(string $seed): string
     {
         return (string) (hexdec(substr(hash('sha256', $seed), 0, 8)) % 900000 + 100000);
+    }
+
+    /*
+     * EndToEndId no formato SPI: `E` + ISPB (8) + YYYYMMDDHHMM (12) + 11 alfanuméricos.
+     * Cada chamada gera um valor novo — o SPI emite no momento da transação,
+     * então mesma chave/transação consultadas duas vezes devem produzir IDs distintos.
+     */
+    public static function generateEndToEndId(string $ispb = '13935893'): string
+    {
+        $ispb = preg_replace('/\D+/', '', $ispb) ?: '13935893';
+        $ispb = str_pad(substr($ispb, 0, 8), 8, '0', STR_PAD_LEFT);
+        $suffix = strtoupper(substr(bin2hex(random_bytes(8)), 0, 11));
+        return 'E' . $ispb . date('YmdHi') . $suffix;
     }
 
     private static function pixDictError(string $scenario): array

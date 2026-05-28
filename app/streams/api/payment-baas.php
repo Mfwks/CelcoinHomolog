@@ -45,6 +45,28 @@ if (($response['status'] ?? null) === 'SUCCESS') {
             Cslabs::writeEntity('pix_payments', $endToEndId, $state);
         }
     });
+
+    $webhookUrl = Cslabs::webhookSubscriptionUrl('pix-payment-out');
+    $webhookPayload = Cslabs::webhookEnvelope('pix-payment-out', 'CONFIRMED', [
+        'id' => $id,
+        'amount' => (float) ($response['amount'] ?? 0),
+        'clientCode' => $clientCode !== '' ? $clientCode : 'CLI-' . substr($id, 0, 7),
+        'reason' => null,
+        'transactionIdentification' => substr($id, 0, 10),
+        'endToEndId' => $endToEndId,
+        'initiationType' => (string) ($body['initiationType'] ?? 'DICT'),
+        'paymentType' => (string) ($body['paymentType'] ?? 'IMMEDIATE'),
+        'urgency' => (string) ($body['urgency'] ?? 'HIGH'),
+        'transactionType' => (string) ($body['transactionType'] ?? 'TRANSFER'),
+        'debitParty' => $body['debitParty'] ?? new stdClass(),
+        'creditParty' => $body['creditParty'] ?? new stdClass(),
+        'remittanceInformation' => (string) ($body['remittanceInformation'] ?? ''),
+        'currentBalance' => 19814.54,
+        'oldBalance' => 19954.54,
+        'dataInsercao' => date(DATE_ATOM),
+    ]);
+
+    Cslabs::scheduleWebhook('pix-payment-out', $webhookPayload, 2, $webhookUrl);
 }
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
