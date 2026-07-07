@@ -10,12 +10,20 @@ header('Content-Type: application/json');
 $body = Cslabs::requestBody();
 $body = is_array($body) ? $body : $_GET;
 
+// Idempotência: mesmo clientCode reenviado (retry) replica a transação original.
+$replay = Cslabs::pixPaymentReplay((string) ($body['clientCode'] ?? ''));
+if ($replay !== null) {
+    echo json_encode($replay, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    return;
+}
+
 $response = Cslabs::pixPaymentResponse($body);
 
 if (($response['status'] ?? null) === 'SUCCESS') {
     $id = $response['transactionId'];
     $clientCode = (string) ($body['clientCode'] ?? '');
     $endToEndId = (string) $response['endToEndId'];
+    $clientRequestId = (string) ($response['clientRequestId'] ?? '');
 
     $state = [
         'status' => 'PROCESSING',
@@ -25,6 +33,7 @@ if (($response['status'] ?? null) === 'SUCCESS') {
             'id' => $id,
             'amount' => (float) ($response['amount'] ?? 0),
             'clientCode' => $clientCode,
+            'clientRequestId' => $clientRequestId,
             'endToEndId' => $endToEndId,
             'initiationType' => (string) ($body['initiationType'] ?? 'DICT'),
             'paymentType' => (string) ($body['paymentType'] ?? 'IMMEDIATE'),

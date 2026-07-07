@@ -34,6 +34,12 @@ Mensagens e errorCodes variam um pouco entre **paymentError** (PIX),
 boleto/cobrança) — cada um traz o texto/código mais adequado ao domínio.
 O HTTP status (coluna acima) é o mesmo nos três.
 
+> **Importante:** valores **≥ R$ 1,00 sempre sucedem**, independentemente
+> dos dígitos. Um `amount` como `1500`, `2500` ou `5000` **não** dispara o
+> cenário `error` — o catálogo de palavras-chave (§2, que inclui `500`)
+> só se aplica à **chave PIX / campos textuais**, nunca ao `amount`. Para
+> forçar CBE500 de forma controlada, use a magic-amount `0,15`.
+
 ### Endpoints cobertos
 
 Magic amount é resolvido automaticamente por `Cslabs::scenarioFromPayload`

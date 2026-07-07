@@ -395,11 +395,17 @@ class Cslabs
             $value = self::arrayGet($payload, $field);
 
             if (in_array($field, ['amount', 'value'], true)) {
+                // Amount usa exclusivamente o catálogo magic-cents (valores < R$ 1,00).
+                // Valores >= R$ 1,00 seguem sucesso e NUNCA passam pelo match de
+                // palavra-chave — senão um amount como "1500" casaria o needle "500"
+                // do cenário `error` e devolveria CBE500 (docs/scenarios.md §1).
                 $scenario = self::scenarioFromAmount($value, '');
 
                 if ($scenario !== '') {
                     return $scenario;
                 }
+
+                continue;
             }
 
             $scenario = self::scenarioFromValue($value, '');
@@ -628,6 +634,39 @@ class Cslabs
             'clientRequestId' => $clientRequestId,
             'amount' => round($amount, 2),
             'endToEndId' => trim((string) ($payload['endToEndId'] ?? '')) ?: self::generateEndToEndId(),
+            'message' => 'Pix recebido com sucesso.',
+            'version' => '1.0.0',
+        ];
+    }
+
+    /*
+     * Idempotência do PIX out: o clientCode é a chave de referência única por
+     * transação no lado do consumidor (str_pad(mov_pix_id, 7, '0')) e, na Celcoin
+     * real, reenviar o mesmo clientCode replica a transação original em vez de
+     * criar outra. Se já existe um pix_payments gravado para este clientCode,
+     * devolve a MESMA resposta de sucesso (mesmo transactionId/endToEndId) — sem
+     * regravar nem disparar novo webhook. Retorna null quando não há replay.
+     */
+    public static function pixPaymentReplay(string $clientCode): ?array
+    {
+        $clientCode = trim($clientCode);
+        if ($clientCode === '') {
+            return null;
+        }
+
+        $state = self::readEntity('pix_payments', $clientCode);
+        if (!is_array($state) || !isset($state['body']['id'])) {
+            return null;
+        }
+
+        $body = $state['body'];
+
+        return [
+            'status' => 'SUCCESS',
+            'transactionId' => (string) $body['id'],
+            'clientRequestId' => (string) ($body['clientRequestId'] ?? ''),
+            'amount' => round((float) ($body['amount'] ?? 0), 2),
+            'endToEndId' => (string) ($body['endToEndId'] ?? ''),
             'message' => 'Pix recebido com sucesso.',
             'version' => '1.0.0',
         ];
@@ -1493,20 +1532,18 @@ class Cslabs
     public static function accountStatusScenario(array $payload, string $account): array
     {
         $status = strtoupper(trim((string) ($payload['status'] ?? '')));
-        $reason = trim((string) ($payload['reason'] ?? ''));
 
         if (!in_array($status, ['ATIVO', 'BLOQUEADO'], true)) {
             return self::accountManagerError('CBE014', 'status é obrigatório (ATIVO|BLOQUEADO).');
         }
-        if ($reason === '') {
-            return self::accountManagerError('CBE014', 'reason é obrigatório e deve conter um formato de texto válido.');
-        }
 
+        // `reason` é opcional aqui — a doc oficial só o exige no DELETE /account/close.
+        // Cenários de erro controlados vêm por `scenario`/`mockScenario` (não por `reason`,
+        // senão um texto natural como "desbloqueio" casaria o needle "bloqueio" → CBE345).
         $scenario = self::scenarioFromPayload($payload, [
             'scenario',
             'mockScenario',
             'mock_scenario',
-            'reason',
         ]);
 
         if ($scenario === 'blocked' || self::accountHasPendingKyc($account)) {
