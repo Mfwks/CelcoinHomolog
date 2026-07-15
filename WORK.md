@@ -8,6 +8,7 @@ Arquivo vivo, três seções. Cada linha: `YYYY-MM-DD · descrição curta · re
 
 ## Próximo
 
+- 2026-07-14 · **Integração V2 (`modules/celcoinv2`) não coberta pelo mock.** Superfície `baas/v2/*` distinta da v1. Especificação em `HOMOLOGACAO_CELCOIN_V2.md`. Pendente decisão de escopo: (a) aliases `baas/v2/*` das ops já existentes (account/status, wallet/balance, wallet/entry, internal/transfer, pix/reverse, dict entry+claim, webhook subscription) → hoje dão 404; (b) produtos novos (topup `v5/transactions/topups/*`, webhook replay, DICT OTP, `wallet/dayBalance`, `charge/pdf/{id}`, `pix/v1/emv/full`, `pix/v2/receivement/v2/status`). Confirmar com devs se `CELCOIN_V2_URL` aponta pro mock e a grafia do receivement.
 - 2026-05-17 · mTLS: confirmar config do Apache para aceitar conexão sem cert (opcional pelo spec). Ambiente real.
 - 2026-05-17 · Quando logs reais chegarem, revisar shape de: bulk onboarding (3 variantes inferidas), claims (5 endpoints), QR estático/dinâmico criar, DELETE charge, AccountManager business/close/fetch-business, SPB reversal, KYC fileupload, exportfile (15 schemas inferidos).
 
