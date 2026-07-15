@@ -10,3 +10,7 @@ vendor
 
 .codex
 .vscode
+
+# Logs CRUS de produção V2 (PII de correntista) — NUNCA commitar/pushar.
+# Material de referência local para os devs implementarem os mocks.
+mocks-v2/
