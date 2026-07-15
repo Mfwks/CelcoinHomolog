@@ -11,9 +11,9 @@ $stored = Cslabs::readEntity('pix_dict_claims', $id);
 
 if (is_array($stored)) {
     echo json_encode([
-        'status' => 'SUCCESS',
-        'version' => '1.0.0',
+        'status' => $stored['status'] ?? 'OPEN',
         'body' => $stored,
+        'version' => '1.0.0',
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     return;
 }

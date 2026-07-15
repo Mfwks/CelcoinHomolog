@@ -85,6 +85,9 @@ check($web, 'GET',    '/baas/v2/wallet/dayBalance',                      'api/wa
 check($web, 'GET',    '/baas/v2/charge/pdf/6fa5026f',                    'api/charge-pdf');          // 3 seg
 check($web, 'DELETE', '/baas/v2/charge/6fa5026f',                       'api/charge-cancel');       // pdf não sombreia cancel
 check($web, 'GET',    '/pix/v2/receivement/v2/status',                  'api/receivement-status');
+check($web, 'GET',    '/baas/v2/webhook/subscription',                  'api/webhook-subscription');
+check($web, 'POST',   '/baas/v2/webhook/subscription',                  'api/webhook-subscription');
+check($web, 'PUT',    '/baas/v2/webhook/subscription/pix-payment-in',   'api/webhook-subscription');
 check($web, 'GET',    '/baas/v2/webhook/replay/onboarding-create',      'api/webhook-replay');
 check($web, 'GET',    '/baas/v2/webhook/replay/onboarding-create/details','api/webhook-replay');
 check($web, 'PUT',    '/baas/v2/webhook/replay/onboarding-create',      'api/webhook-replay');

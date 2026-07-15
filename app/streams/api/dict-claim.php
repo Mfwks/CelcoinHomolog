@@ -23,7 +23,8 @@ if (($response['status'] ?? null) === 'ERROR') {
     http_response_code(422);
 }
 
-if (($response['status'] ?? null) === 'SUCCESS') {
+// Sucesso agora carrega o enum do claim (OPEN/CONFIRMED/CANCELLED) no topo, não "SUCCESS".
+if (($response['status'] ?? null) !== 'ERROR' && isset($response['body']['id'])) {
     Cslabs::writeEntity('pix_dict_claims', $response['body']['id'], $response['body']);
 }
 

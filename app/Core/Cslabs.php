@@ -828,18 +828,17 @@ class Cslabs
                     'key' => $entry['key'] ?? null,
                     'account' => $entry['account'] ?? null,
                     'owner' => $entry['owner'] ?? null,
-                    'createDate' => $entry['account']['createDate'] ?? ($entry['created_at'] ?? null),
                 ];
             }
         }
 
+        // Real: body.listKeys[] (não pixKeys), sem totalElements. Ver HOMOLOGACAO_CELCOIN_V2.md Apêndice A.
         return [
             'status' => 'SUCCESS',
-            'version' => '1.0.0',
             'body' => [
-                'pixKeys' => $entries,
-                'totalElements' => count($entries),
+                'listKeys' => $entries,
             ],
+            'version' => '1.0.0',
         ];
     }
 
@@ -872,10 +871,11 @@ class Cslabs
         $claimId = trim((string) ($payload['id'] ?? $payload['claimId'] ?? '')) ?: gerarHashMock();
         $body = self::buildPixDictClaimBody($claimId, $key, $statusByKind[$kind], $payload);
 
+        // Real: o status do claim (OPEN/CONFIRMED/CANCELLED/...) vem no TOPO, não "SUCCESS".
         return [
-            'status' => 'SUCCESS',
-            'version' => '1.0.0',
+            'status' => $statusByKind[$kind],
             'body' => $body,
+            'version' => '1.0.0',
         ];
     }
 
@@ -890,37 +890,37 @@ class Cslabs
         }
 
         return [
-            'status' => 'SUCCESS',
-            'version' => '1.0.0',
+            'status' => 'OPEN',
             'body' => self::buildPixDictClaimBody($id, '', 'OPEN', []),
+            'version' => '1.0.0',
         ];
     }
 
     private static function buildPixDictClaimBody(string $claimId, string $key, string $status, array $payload): array
     {
-        // keyType: request usa UPPER (CPF/CNPJ/EMAIL/PHONE); response usa Pascal
-        // (CPF/CNPJ/Email/Phone). Inconsistência preservada conforme doc oficial.
+        // Real: keyType em UPPER (CPF/CNPJ/EMAIL/PHONE) — confirmado nos logs de produção
+        // (o Apêndice v1 dizia Pascal, mas o tráfego real da V2 é UPPER).
         $keyTypeRequest = strtoupper(trim((string) ($payload['keyType'] ?? '')));
-        $pascalMap = ['CPF' => 'CPF', 'CNPJ' => 'CNPJ', 'EMAIL' => 'Email', 'PHONE' => 'Phone'];
         $detected = strtoupper(self::pixKeyType($key !== '' ? $key : 'fallback@pix.com'));
-        $keyTypePascal = $pascalMap[$keyTypeRequest] ?? $pascalMap[$detected] ?? 'CPF';
+        $keyType = $keyTypeRequest !== '' ? $keyTypeRequest : $detected;
 
         $accountInput = (string) ($payload['account'] ?? '');
         $accountDigits = preg_replace('/\D+/', '', $accountInput) ?: '';
         $claimerTaxId = $key !== '' ? self::pixKeyOwnerDocument($key) : '06170097914';
+        $claimAccount = $accountDigits !== '' ? $accountDigits : self::accountNumberFromSeed(hash('sha256', $key . $claimId));
 
         $now = gmdate('Y-m-d\TH:i:s.000\Z');
         $periodEnd = gmdate('Y-m-d\TH:i:s.000\Z', time() + (7 * 86400));
 
         return [
             'id' => $claimId,
-            'claimType' => strtoupper((string) ($payload['claimType'] ?? 'PORTABILITY')),
+            'claimType' => strtoupper((string) ($payload['claimType'] ?? 'OWNERSHIP')),
             'key' => $key,
-            'keyType' => $keyTypePascal,
+            'keyType' => $keyType,
+            // Real claimerAccount = {participant, account, accountType} (sem branch).
             'claimerAccount' => [
                 'participant' => '13935893',
-                'branch' => '0001',
-                'account' => $accountDigits !== '' ? $accountDigits : self::accountNumberFromSeed(hash('sha256', $key . $claimId)),
+                'account' => $claimAccount,
                 'accountType' => 'TRAN',
             ],
             'claimer' => [
@@ -928,7 +928,14 @@ class Cslabs
                 'taxId' => $claimerTaxId,
                 'name' => (string) ($payload['claimerName'] ?? 'HOMOLOGACAO'),
             ],
-            'donorParticipant' => (string) ($payload['donorParticipant'] ?? '60746948'),
+            'donorParticipant' => (string) ($payload['donorParticipant'] ?? '13935893'),
+            // Real: consultar/listar trazem donorAccount (open não traz; extra é inofensivo).
+            'donorAccount' => [
+                'account' => self::accountNumberFromSeed(hash('sha256', 'donor' . $key . $claimId)),
+                'branch' => '0001',
+                'taxId' => $claimerTaxId,
+                'name' => 'HOMOLOGACAO',
+            ],
             'createTimestamp' => $now,
             'completionPeriodEnd' => $periodEnd,
             'resolutionPeriodEnd' => $periodEnd,
@@ -1698,7 +1705,7 @@ class Cslabs
                 'barCodeInfo' => ['digitable' => $digitable],
             ],
             'status' => 'PROCESSING',
-            'version' => '1.1.0',
+            'version' => '1.2.0', // real: baas/v2/billpayment usa 1.2.0
         ];
     }
 
@@ -1836,7 +1843,7 @@ class Cslabs
         }
 
         return [
-            'version' => '1.0.0',
+            'version' => '1.1.0', // real: baas/v2/charge usa 1.1.0
             'status' => 'SUCCESS',
             'body' => self::chargeFetchBody($record),
         ];
@@ -1877,13 +1884,14 @@ class Cslabs
             'boleto' => [
                 'transactionId' => (string) ($record['boleto']['transactionId'] ?? self::chargeBoletoIds($txid)['transactionId']),
                 'status' => $boletoStatusLabel,
-                'bankEmissor' => 'itauAgreement',
+                'bankEmissor' => 'CELCOIN INSTITUIÇÃO DE PAGAMENTO - SA',
                 'bankNumber' => (string) ($record['boleto']['bankNumber'] ?? self::chargeBoletoIds($txid)['bankNumber']),
                 'bankAgency' => '0001',
                 'bankAccount' => $bankAccount,
                 'barCode' => $barCode,
                 'bankLine' => $bankLine,
                 'bankAssignor' => 'CELCOIN INSTITUIÇÃO DE PAGAMENTO - SA',
+                'invoiceNumber' => null,
             ],
             'pix' => [
                 'transactionId' => (string) ($record['pix']['transactionId'] ?? substr($txid, 0, 9)),
@@ -1892,7 +1900,9 @@ class Cslabs
                 'key' => (string) ($record['key'] ?? ''),
                 'emv' => (string) ($record['pix']['emv'] ?? ''),
             ],
-            'split' => $record['split'] ?? null,
+            'split' => $record['split'] ?? [],
+            'informations' => null,
+            'chargeType' => 'BOLEPIX',
         ];
     }
 
@@ -1915,7 +1925,7 @@ class Cslabs
         return [
             'body' => $body,
             'status' => $confirmed ? 'CONFIRMED' : 'PROCESSING',
-            'version' => '1.1.0',
+            'version' => '1.2.0', // real: baas/v2/billpayment/status usa 1.2.0
         ];
     }
 

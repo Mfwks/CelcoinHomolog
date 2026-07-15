@@ -159,6 +159,11 @@ $web->add('/baas/v2/wallet/dayBalance','api/wallet-day-balance');
 $web->add('/baas/v2/charge/pdf/{id}','api/charge-pdf'); // 3 seg: não colide com charge/{txid}
 $web->add('/pix/v2/receivement/v2/status','api/receivement-status'); // grafia literal chamada pela V2
 
+# Webhook subscription (V2 usa baas/v2/webhook/subscription; stream ramifica por método)
+$web->add('/baas/v2/webhook/subscription','api/webhook-subscription');
+$web->add('/baas/v2/webhook/subscription/entity','api/webhook-subscription');
+$web->add('/baas/v2/webhook/subscription/{entity}','api/webhook-subscription');
+
 # Webhook replay (details tem 1 segmento a mais; não colide com {entity})
 $web->add('/baas/v2/webhook/replay/{entity}/details','api/webhook-replay');
 $web->add('/baas/v2/webhook/replay/{entity}','api/webhook-replay');
