@@ -80,6 +80,24 @@ check($web, 'GET',    '/baas/v2/charge',                                'api/cha
 check($web, 'DELETE', '/baas/v2/charge/6fa5026f',                       'api/charge-cancel');
 check($web, 'GET',    '/baas/v2/wallet/movement',                       'api/wallet-movement');
 
+# Produtos novos (Commit B)
+check($web, 'GET',    '/baas/v2/wallet/dayBalance',                      'api/wallet-day-balance');
+check($web, 'GET',    '/baas/v2/charge/pdf/6fa5026f',                    'api/charge-pdf');          // 3 seg
+check($web, 'DELETE', '/baas/v2/charge/6fa5026f',                       'api/charge-cancel');       // pdf não sombreia cancel
+check($web, 'GET',    '/pix/v2/receivement/v2/status',                  'api/receivement-status');
+check($web, 'GET',    '/baas/v2/webhook/replay/onboarding-create',      'api/webhook-replay');
+check($web, 'GET',    '/baas/v2/webhook/replay/onboarding-create/details','api/webhook-replay');
+check($web, 'PUT',    '/baas/v2/webhook/replay/onboarding-create',      'api/webhook-replay');
+check($web, 'GET',    '/v5/transactions/topups/providers',              'api/topups');
+check($web, 'GET',    '/v5/transactions/topups/provider-values',        'api/topups');
+check($web, 'GET',    '/v5/transactions/topups/status-consult',         'api/topups');
+check($web, 'PUT',    '/v5/transactions/topups/5332764900/capture',     'api/topups');
+check($web, 'POST',   '/v5/transactions/topups',                        'api/topups');
+
+# Regressão: v5 e token não afetados
+check($web, 'POST',   '/v5/token',                                      'api/token');
+check($web, 'POST',   '/v5/transactions/billpayments/authorize',        'api/billpayment-authorize');
+
 # Regressão: v1 (baas-accountmanager) não afetado pelos aliases baas/v2
 check($web, 'PUT',    '/baas-accountmanager/v1/account/status',         'api/account-status-update');
 

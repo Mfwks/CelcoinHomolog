@@ -486,6 +486,8 @@ Formato: `{ "status":"ERROR", "error":{ "errorCode":"<COD>","message":"..." }, "
 
 Legenda: ✅ já responde · 🔁 operação existe no mock em outro path (falta **alias `baas/v2`**) · 🆕 produto novo (mock não tem nada).
 
+> **Status (2026-07-15): implementado.** Os 🔁 (aliases `baas/v2/*`) e os 🆕 (dayBalance, charge/pdf, receivement, webhook replay, topups, DICT OTP) já estão no mock — ver `WORK.md` e `tests/celcoinv2_routing_smoke.php`. dayBalance usa o shape real do Apêndice B; topups/receivement/OTP são plausíveis (nenhum tenant exercitou em log) e marcados como inferidos nos streams.
+
 ### Já cobertos (nenhuma ação)
 `POST /v5/token` · `onboarding/v1/onboarding-proposal/{natural-person,legal-person}` · `GET onboarding/v1/onboarding-proposal` · `GET baas-onboarding/v1/account/check` · `POST celcoinkyc/document/v1/fileupload` · `POST/GET baas-wallet-transactions-webservice/v1/spb/transfer` · `POST baas/v2/pix/payment` (+`/status`) · `GET baas/v2/pix/dict/entry/external/{acc}` · `pix/v1/brcode/{static,dynamic}` · `GET baas/v2/wallet/movement` · `POST api-integration-baas-webservice/v1/charge` · `GET baas/v2/charge` · `DELETE baas/v2/charge/{txid}` · `POST baas/v2/billpayment` (+`/status`) · `POST v5/transactions/billpayments/authorize`.
 

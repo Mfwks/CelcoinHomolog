@@ -152,3 +152,21 @@ $web->add('/baas/v2/pix/dict/claim/cancel','api/dict-claim');
 $web->add('/baas/v2/pix/dict/claim','api/dict-claim');
 $web->add('/baas/v2/pix/dict/claim/{id}','api/dict-claim-router');
 
+# ── V2 produtos sem equivalente v1 ──
+# Shapes reais no Apêndice B do doc onde houve log (dayBalance); inferidos onde
+# nenhum tenant exercitou (topups, receivement) — retornam 2xx plausível.
+$web->add('/baas/v2/wallet/dayBalance','api/wallet-day-balance');
+$web->add('/baas/v2/charge/pdf/{id}','api/charge-pdf'); // 3 seg: não colide com charge/{txid}
+$web->add('/pix/v2/receivement/v2/status','api/receivement-status'); // grafia literal chamada pela V2
+
+# Webhook replay (details tem 1 segmento a mais; não colide com {entity})
+$web->add('/baas/v2/webhook/replay/{entity}/details','api/webhook-replay');
+$web->add('/baas/v2/webhook/replay/{entity}','api/webhook-replay');
+
+# Recarga (topups) — superfície v5. Literais e {transactionId}/capture não colidem entre si.
+$web->add('/v5/transactions/topups/providers','api/topups');
+$web->add('/v5/transactions/topups/provider-values','api/topups');
+$web->add('/v5/transactions/topups/status-consult','api/topups');
+$web->add('/v5/transactions/topups/{transactionId}/capture','api/topups');
+$web->add('/v5/transactions/topups','api/topups');
+
