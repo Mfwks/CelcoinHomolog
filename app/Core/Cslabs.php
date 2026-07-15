@@ -3222,15 +3222,52 @@ class Cslabs
         $offset = ($page - 1) * $limit;
         $slice = array_slice($all, $offset, $limit);
 
+        // Real: body.proposal[] (singular), item com status(enum)/proposalType/
+        // createdAt/updatedAt/documentscopys[]. Ver HOMOLOGACAO_CELCOIN_V2.md Apêndice A.
+        $statusMap = ['CREATED' => 'RESOURCE_CREATED'];
+        $items = [];
+        foreach ($slice as $row) {
+            $proposalId = (string) ($row['proposalId'] ?? '');
+            $document = (string) ($row['documentNumber'] ?? '');
+            $status = strtoupper((string) ($row['status'] ?? $row['proposalStatus'] ?? 'CREATED'));
+            $status = $statusMap[$status] ?? $status;
+            $type = strtoupper((string) ($row['proposalType'] ?? ''));
+            if ($type === '') {
+                $type = strlen(preg_replace('/\D+/', '', $document)) === 14 ? 'PJ' : 'PF';
+            }
+            $created = (string) ($row['createdAt'] ?? $row['createDate'] ?? gmdate('Y-m-d\TH:i:s.v\Z'));
+            $updated = (string) ($row['updatedAt'] ?? $created);
+
+            $items[] = [
+                'proposalId' => $proposalId,
+                'clientCode' => (string) ($row['clientCode'] ?? ''),
+                'documentNumber' => $document,
+                'status' => $status,
+                'proposalType' => $type,
+                'createdAt' => $created,
+                'updatedAt' => $updated,
+                'documentscopys' => [[
+                    'proposalId' => $proposalId,
+                    'documentNumber' => $document,
+                    'documentscopyId' => substr(hash('sha256', $proposalId . '|doc'), 0, 24),
+                    'status' => $status === 'REPROVED' ? 'REPROVED' : 'PENDING',
+                    'url' => 'https://cadastro.io/' . substr(hash('sha256', $proposalId . '|url'), 0, 32),
+                    'createdAt' => $created,
+                    'updateAt' => $updated, // sic: real usa "updateAt" (sem d) dentro de documentscopys
+                ]],
+            ];
+        }
+
         return [
             'version' => '1.0.0',
             'status' => 'SUCCESS',
             'body' => [
-                'proposals' => $slice,
-                'totalItems' => $total,
+                'limit' => $limit,
                 'currentPage' => $page,
-                'totalPages' => $total === 0 ? 0 : (int) ceil($total / $limit),
                 'limitPerPage' => $limit,
+                'totalPages' => $total === 0 ? 0 : (int) ceil($total / $limit),
+                'totalItems' => $total,
+                'proposal' => $items,
             ],
         ];
     }

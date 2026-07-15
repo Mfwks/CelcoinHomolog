@@ -82,6 +82,20 @@ ok(array_key_exists('invoiceNumber', $fb['boleto'] ?? []) && $fb['boleto']['invo
 ok(is_array($fb['split'] ?? null), 'charge fetch: split é array');
 ok(($fb['boleto']['bankEmissor'] ?? '') === 'CELCOIN INSTITUIÇÃO DE PAGAMENTO - SA', 'charge fetch: bankEmissor real');
 
+# 5) Onboarding proposal list — body.proposal (singular) com item rico
+Cslabs::writeEntity('onboarding_proposals', 'prop-1', [
+    'proposalId' => 'prop-1', 'clientCode' => 'BO-CV2-1-1', 'documentNumber' => '12345678000199',
+    'proposalStatus' => 'CREATED', 'createDate' => '2026-07-01T10:00:00Z',
+]);
+$pl = Cslabs::onboardingProposalListResponse([]);
+ok(array_key_exists('proposal', $pl['body'] ?? []), 'proposal list: body.proposal (singular)');
+ok(!array_key_exists('proposals', $pl['body'] ?? []), 'proposal list: body.proposals removido');
+$it = $pl['body']['proposal'][0] ?? [];
+ok(($it['proposalType'] ?? '') === 'PJ', 'proposal list: proposalType PJ (CNPJ 14 díg)');
+ok(($it['status'] ?? '') === 'RESOURCE_CREATED', 'proposal list: status CREATED->RESOURCE_CREATED');
+ok(isset($it['documentscopys'][0]['url']), 'proposal list: documentscopys[].url presente');
+ok(array_key_exists('limit', $pl['body'] ?? []), 'proposal list: body.limit presente');
+
 if ($fails > 0) {
     echo "\ncelcoinv2 shapes smoke: $fails FALHA(S)\n";
     exit(1);
