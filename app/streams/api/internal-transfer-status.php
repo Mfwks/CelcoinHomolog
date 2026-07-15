@@ -7,7 +7,8 @@ use App\Core\Cslabs;
 header('Content-Type: application/json');
 
 $clientRequestId = trim((string) ($_GET['ClientRequestId'] ?? $_GET['clientRequestId'] ?? ''));
-$transactionId = trim((string) ($_GET['TransactionId'] ?? $_GET['transactionId'] ?? ''));
+# V2 (celcoinv2) consulta por Id; v1 usa TransactionId. Aceitar ambos.
+$transactionId = trim((string) ($_GET['Id'] ?? $_GET['id'] ?? $_GET['TransactionId'] ?? $_GET['transactionId'] ?? ''));
 
 $state = false;
 

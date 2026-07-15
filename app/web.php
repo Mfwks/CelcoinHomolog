@@ -119,3 +119,36 @@ $web->add('/tools-conciliation/v1/ConsolidatedStatement','api/consolidated-state
 $web->add('/tools-conciliation/v1/exportfile/types','api/exportfile-types');
 $web->add('/tools-conciliation/v1/exportfile','api/exportfile');
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Integração V2 (consumidor modules/celcoinv2) — superfície baas/v2/*
+# Ver HOMOLOGACAO_CELCOIN_V2.md §11. Muitas rotas reusam streams v1 (mesmo shape
+# de envelope {status,version,body}). ATENÇÃO: Web::search casa por ORDEM de
+# registro e IGNORA o método HTTP; por isso o dispatcher dict-entry-v2 (um único
+# {key} que ramifica GET=listar / DELETE=excluir / POST otp|confirm) e as rotas
+# literais de claim (list/confirm/cancel) vêm ANTES do {id}.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Conta / carteira (baas/v2)
+$web->add('/baas/v2/account/status','api/account-status-update');
+$web->add('/baas/v2/account/close','api/account-close');
+$web->add('/baas/v2/wallet/balance','api/wallet-balance');
+$web->add('/baas/v2/wallet/entry/{account}','api/wallet-entry');
+$web->add('/baas/v2/wallet/internal/transfer','api/internal-transfer');
+$web->add('/baas/v2/wallet/internal/transfer/status','api/internal-transfer-status');
+
+# Pix — devolução + EMV (baas/v2 e pix/v1/emv/full)
+$web->add('/baas/v2/pix/reverse','api/pix-reverse-baas');
+$web->add('/pix/v1/emv/full','api/emv'); // mesmo decode; V2 chama /full
+
+# Pix DICT — chave. entry (create, exato) e o dispatcher entry/{key}.
+# entry/external/{account} (3 segmentos) já registrado acima; não colide.
+$web->add('/baas/v2/pix/dict/entry','api/dict-entry-create');
+$web->add('/baas/v2/pix/dict/entry/{key}','api/dict-entry-v2'); // GET=listar · DELETE=excluir · POST otp|confirm
+
+# Pix DICT — claims (literais antes do {id})
+$web->add('/baas/v2/pix/dict/claim/list','api/dict-claim-list');
+$web->add('/baas/v2/pix/dict/claim/confirm','api/dict-claim');
+$web->add('/baas/v2/pix/dict/claim/cancel','api/dict-claim');
+$web->add('/baas/v2/pix/dict/claim','api/dict-claim');
+$web->add('/baas/v2/pix/dict/claim/{id}','api/dict-claim-router');
+
