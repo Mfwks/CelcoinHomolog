@@ -22,6 +22,63 @@ $response = Cslabs::emvDecodeResponse($body);
 
 if (($response['status'] ?? null) === 'ERROR') {
     http_response_code(400);
+} elseif (str_ends_with(Cslabs::context()['path'] ?? '', '/emv/full')) {
+    /*
+     * Mesmo stream serve /pix/v1/emv (v1) e /pix/v1/emv/full (V2), e os shapes
+     * reais são diferentes — por isso o branch é pelo sufixo do path e não por
+     * Cslabs::isV2() (nenhum dos dois está sob /baas/v2/).
+     *
+     * A v1 lê PLANO e fixo ($dadosEmv->type, ->collection, ->transactionAmount,
+     * ->merchantAccountInformation->key — CelcoinPix::consultaQRCode:1290-1332),
+     * então o shape acima não pode mudar. O /full real vem enveloped, com `status`
+     * INT (200, não string), `type` textual (IMMEDIATE), amount detalhado e bloco
+     * `payload`. Quirk real preservado: `additionaldata` com "d" minúsculo.
+     * Ver HOMOLOGACAO_CELCOIN_V2.md §4.9.
+     */
+    $mai = $response['merchantAccountInformation'];
+    $amount = (float) $response['transactionAmount'];
+
+    $response = [
+        'version' => '1.0.0',
+        'status' => 200,
+        'body' => [
+            'type' => $response['collection'] === '1' ? 'IMMEDIATE' : 'STATIC',
+            'merchantAccountInformation' => [
+                'url' => $mai['url'],
+                'gui' => $mai['gui'],
+                'merchantCategoryCode' => '0000',
+                'additionaldata' => null,
+                'withdrawalServiceProvider' => null,
+                'merchantName' => $response['merchantName'],
+                'merchantCity' => $response['merchantCity'],
+                'postalCode' => $response['postalCode'],
+            ],
+            'key' => $mai['key'],
+            'amount' => [
+                'original' => $amount,
+                'abatement' => null,
+                'discount' => null,
+                'interest' => null,
+                'final' => $amount,
+                'fine' => null,
+                'canModifyFinalAmount' => false,
+                'withdrawal' => null,
+                'change' => null,
+            ],
+            'transactionIdentification' => $response['transactionIdentification'],
+            'payload' => [
+                'status' => 'ACTIVE',
+                'revision' => 0,
+                'calendar' => [
+                    'createdAt' => gmdate('Y-m-d\TH:i:s.v\Z', time() - 3600),
+                    'presentation' => gmdate('Y-m-d\TH:i:s.v\Z'),
+                    'dueDate' => null,
+                    'validateAfterDuedate' => null,
+                    'expiration' => 3946686,
+                ],
+            ],
+        ],
+    ];
 }
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

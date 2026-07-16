@@ -58,6 +58,34 @@ class Cslabs
         return self::$context ?? self::boot();
     }
 
+    /*
+     * V1 e V2 compartilham streams em vários pontos (aliases em web.php), mas a
+     * Celcoin real responde shapes DIFERENTES nos dois: a v1 é plana, a V2 vem
+     * no envelope {status, version, body}. Como os consumidores v1 leem caminhos
+     * fixos no topo (ex.: CelcoinPix::consultaChavePix lê $dict->endtoEndId), não
+     * dá pra mudar o shape do stream inteiro — os builders continuam devolvendo
+     * o shape v1/plano e os streams envelopam só quando a chamada veio por
+     * /baas/v2/*. Ver HOMOLOGACAO_CELCOIN_V2.md §1.1.
+     */
+    public static function isV2(): bool
+    {
+        $path = self::context()['path'] ?? '';
+        return strpos($path, '/baas/v2/') === 0;
+    }
+
+    /*
+     * Envelope real da V2. A ordem dos campos varia na Celcoin real, então não
+     * vale a pena fixar — o que importa é status/version/body.
+     */
+    public static function v2Envelope(array $body, string $status = 'SUCCESS', string $version = '1.0.0'): array
+    {
+        return [
+            'status' => $status,
+            'version' => $version,
+            'body' => $body,
+        ];
+    }
+
     public static function infoUrl(?string $clientId = null): string
     {
         $clientId ??= self::context()['client_id'];
@@ -661,14 +689,17 @@ class Cslabs
 
         $body = $state['body'];
 
+        // O replay tem que devolver o MESMO shape da resposta original — inclusive
+        // o bloco `body`, que é de onde v1 e V2 leem o id/endToEndId.
         return [
-            'status' => 'SUCCESS',
+            'status' => self::isV2() ? 'PROCESSING' : 'SUCCESS',
             'transactionId' => (string) $body['id'],
             'clientRequestId' => (string) ($body['clientRequestId'] ?? ''),
             'amount' => round((float) ($body['amount'] ?? 0), 2),
             'endToEndId' => (string) ($body['endToEndId'] ?? ''),
             'message' => 'Pix recebido com sucesso.',
             'version' => '1.0.0',
+            'body' => $body,
         ];
     }
 
@@ -969,19 +1000,22 @@ class Cslabs
             ];
         }
 
-        $transactionId = (string) random_int(1000000000, 9999999999);
+        $transactionId = random_int(1000000000, 9999999999);
         $amount = number_format((float) ($payload['amount'] ?? 0), 2, '.', '');
+        $transactionIdentification = (string) ($payload['transactionIdentification'] ?? 'PIX' . $transactionId);
 
+        /*
+         * PLANO de propósito: o QR estático real da Celcoin não usa envelope
+         * (log: {"transactionId":1782034592,"emvqrcps":"000201...","transactionIdentification":"***","recurrency":null}),
+         * e é assim que a v1 lê (CelcoinPix::criarQRCodeEstatico → $responseBody->emvqrcps,
+         * sem fallback). Enquanto isso ficou dentro de body, a v1 recebia null.
+         * transactionId é INT no real. Ver HOMOLOGACAO_CELCOIN_V2.md §4.8.
+         */
         return [
-            'status' => 'SUCCESS',
-            'version' => '1.0.0',
-            'body' => [
-                'transactionId' => $transactionId,
-                'emvqrcps' => self::buildEmv($key, $amount, (string) ($payload['transactionIdentification'] ?? 'PIX' . $transactionId)),
-                'transactionIdentification' => (string) ($payload['transactionIdentification'] ?? 'PIX' . $transactionId),
-                'key' => $key,
-                'amount' => (float) $amount,
-            ],
+            'transactionId' => $transactionId,
+            'emvqrcps' => self::buildEmv($key, $amount, $transactionIdentification),
+            'transactionIdentification' => $transactionIdentification,
+            'recurrency' => null,
         ];
     }
 
@@ -1008,17 +1042,40 @@ class Cslabs
             : number_format((float) $amountInput, 2, '.', '');
         $expiration = (int) ($payload['expiration'] ?? 86400);
 
+        /*
+         * O duplo-envelope aqui NÃO é acidente: a v1 lê caminhos fixos
+         * $qrDinamico->body->body->dynamicBRCodeData->emvqrcps, ->body->body->amount->original,
+         * ->body->transactionId etc. (CelcoinPix::geraQRCodeDinamico:2005-2016, sem
+         * fallback), e o real da Celcoin devolve exatamente isso. Não achatar.
+         * `status` no topo é INT 201 no real (a v1 não lê status nesta rota).
+         * Demais campos (createTimestamp, entity, tags, transactionIdentification…)
+         * são o que o log mostra. Ver HOMOLOGACAO_CELCOIN_V2.md §4.8.
+         */
+        $now = time();
+
         return [
-            'status' => 'SUCCESS',
             'version' => '1.0.0',
+            'status' => 201,
             'body' => [
                 'clientRequestId' => $clientRequestId,
-                'transactionId' => $transactionId,
                 'pactualId' => $pactualId,
+                'transactionId' => $transactionId,
+                'createTimestamp' => gmdate('Y-m-d\TH:i:s.v\Z', $now),
+                'lastUpdateTimestamp' => '0001-01-01T00:00:00',
+                'entity' => 'DynamicBRCode',
+                'status' => 'ACTIVE',
+                'tags' => null,
+                'transactionIdentification' => 'kk6g232xel65a0daee4dd13kk' . $transactionId,
                 'body' => [
+                    'key' => $key,
+                    'revision' => '0',
                     'location' => 'qrcode.pix.celcoin.com.br/pixqrcode/v2/cobv/' . $locationId,
-                    'calendar' => ['expiration' => $expiration],
+                    'debtor' => ['name' => null, 'cpf' => null, 'cnpj' => null],
                     'amount' => ['original' => $amountStr],
+                    'calendar' => [
+                        'expiration' => $expiration,
+                        'dueDate' => gmdate('Y-m-d\TH:i:s.v', $now + $expiration),
+                    ],
                     'dynamicBRCodeData' => [
                         'emvqrcps' => self::buildEmv($key, $amountStr, $clientRequestId),
                         'merchantAccountInformation' => [
@@ -1040,15 +1097,27 @@ class Cslabs
             ];
         }
 
+        /*
+         * O cancelamento real não devolve um recibo enxuto: devolve a cobrança
+         * INTEIRA (mesmo body do GET /baas/v2/charge, com boleto e pix populados),
+         * status PROCESSING no topo — o CANCELED só chega depois pelo webhook
+         * charge-canceled — e version 1.1.0 como o resto do produto charge.
+         * Ver HOMOLOGACAO_CELCOIN_V2.md §14 (Apêndice A, "Charge").
+         * Rota exclusiva da V2 (DELETE /baas/v2/charge/{txid}), sem par v1.
+         */
+        $record = self::readEntity('charges', $txid);
+
         return [
-            'status' => 'SUCCESS',
-            'version' => '1.0.0',
-            'body' => [
-                'transactionId' => $txid,
-                'status' => 'CANCELLED',
-                'reason' => (string) ($payload['reason'] ?? ''),
-                'cancelDate' => gmdate('Y-m-d\TH:i:s\Z'),
-            ],
+            'status' => 'PROCESSING',
+            'version' => '1.1.0',
+            'body' => is_array($record)
+                ? self::chargeFetchBody($record)
+                : [
+                    'transactionId' => $txid,
+                    'status' => 'PROCESSING',
+                    'reason' => (string) ($payload['reason'] ?? ''),
+                    'cancelDate' => gmdate('Y-m-d\TH:i:s\Z'),
+                ],
         ];
     }
 
@@ -3295,26 +3364,42 @@ class Cslabs
         $movements = [];
         $baseTs = strtotime($dateFrom . ' 09:00:00') ?: time();
 
+        /*
+         * Shape real (HOMOLOGACAO_CELCOIN_V2.md §15/B.1): paginação e janela ficam
+         * no TOPO, irmãs de `body` — não dentro dele; `body` só tem account,
+         * documentNumber e movements[]. O item real usa `balanceType` (DEBIT/CREDIT)
+         * + `movementType` (PIXPAYMENTOUT/PIXREVERSALIN/…), `status` é texto em
+         * português ("Saldo Liberado") e os nomes/saldos vêm em `additionalInformation`
+         * — não existe counterParty/movementCode/balanceAfter no real.
+         * Vale para os dois paths: nenhum consumidor v1 lê campo deste extrato
+         * (CelcoinBaas::extrato só devolve o corpo cru pra log).
+         */
+        $balance = 3000000.00;
+
         for ($i = 0; $i < $count; $i++) {
             $chunk = substr($seed, $i * 4, 8);
             $isCredit = (hexdec(substr($chunk, 0, 2)) % 2) === 0;
             $amount = round((hexdec(substr($chunk, 2, 4)) % 50000) / 100 + 10, 2);
+            $oldBalance = $balance;
+            $balance = round($balance + ($isCredit ? $amount : -$amount), 2);
+            $ts = $baseTs + ($i * 600);
+
             $movements[] = [
                 'id' => gerarHashMock(),
+                // Em reversão o real manda clientCode/description null.
+                'clientCode' => $isCredit ? null : str_pad((string) (30000 + $i), 7, '0', STR_PAD_LEFT),
+                'description' => $isCredit ? null : 'pix',
+                'createDate' => gmdate('Y-m-d\TH:i:s', $ts),
+                'lastUpdateDate' => gmdate('Y-m-d\TH:i:s', $ts),
                 'amount' => $amount,
-                'movementType' => $isCredit ? 'CREDIT' : 'DEBIT',
-                'movementCode' => $isCredit ? 'PIX_IN' : 'PIX_OUT',
-                'description' => $isCredit ? 'Pix recebido' : 'Pix enviado',
-                'transactionIdentification' => 'E13935893' . date('YmdHi', $baseTs + ($i * 600)) . substr($chunk, 0, 11),
-                'clientCode' => '',
-                'createDate' => gmdate('Y-m-d\TH:i:s\Z', $baseTs + ($i * 600)),
-                'balanceAfter' => round(3000000.00 + ($isCredit ? $amount : -$amount), 2),
-                'counterParty' => [
-                    'name' => $isCredit ? 'JOAO PAGADOR' : 'MARIA RECEBEDORA',
-                    'documentNumber' => $isCredit ? '11122233344' : '55566677788',
-                    'bank' => $isCredit ? '341' : '237',
-                    'branch' => '0001',
-                    'account' => '12345-6',
+                'status' => 'Saldo Liberado',
+                'balanceType' => $isCredit ? 'CREDIT' : 'DEBIT',
+                'movementType' => $isCredit ? 'PIXREVERSALIN' : 'PIXPAYMENTOUT',
+                'additionalInformation' => [
+                    'nameCredit' => $isCredit ? 'MARIA RECEBEDORA' : 'JOAO PAGADOR',
+                    'nameDebit' => $isCredit ? 'JOAO PAGADOR' : 'MARIA RECEBEDORA',
+                    'oldBalance' => $oldBalance,
+                    'currentBalance' => $balance,
                 ],
             ];
         }
@@ -3323,18 +3408,18 @@ class Cslabs
         $total = count($movements);
 
         return [
-            'version' => '1.0.0',
             'status' => 'SUCCESS',
+            'version' => '1.0.0',
+            'totalItems' => $total,
+            'currentPage' => $page,
+            'limitPerPage' => $limit,
+            'totalPages' => (int) ceil($total / $limit),
+            'dateFrom' => $dateFrom,
+            'dateTo' => $dateTo,
             'body' => [
                 'account' => $account !== '' ? $account : self::accountNumberFromSeed($seed),
                 'documentNumber' => $document,
-                'dateFrom' => $dateFrom,
-                'dateTo' => $dateTo,
                 'movements' => array_slice($movements, ($page - 1) * $limit, $limit),
-                'totalItems' => $total,
-                'currentPage' => $page,
-                'totalPages' => (int) ceil($total / $limit),
-                'order' => $order,
             ],
         ];
     }

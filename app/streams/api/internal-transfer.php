@@ -58,37 +58,45 @@ if ($existing !== false) {
 }
 
 $transactionId = gerarHashMock();
-$transfer = [
-    'transactionId' => $transactionId,
-    'clientRequestId' => $clientRequestId,
-    'amount' => round($amount, 2),
-    'status' => 'PROCESSING',
-    'description' => $description !== '' ? $description : 'Transferencia interna',
-    'debitParty' => [
-        'account' => $debitAccount,
-    ],
-    'creditParty' => [
-        'account' => $creditAccount,
-    ],
-    'createdAt' => date(DATE_ATOM),
-];
+// endToEndId da transferência interna é UUID, não E2E de Pix (log real).
+$endToEndId = gerarHashMock();
 
-$response = [
-    'transactionId' => $transactionId,
-    'clientRequestId' => $clientRequestId,
-    'status' => 'PROCESSING',
-    'amount' => round($amount, 2),
-    'message' => 'Transferência interna recebida com sucesso.',
-];
+/*
+ * Shape real (HOMOLOGACAO_CELCOIN_V2.md §15/B.1): envelope {status:PROCESSING,
+ * version, body:{id, amount, clientRequestId, endToEndId, debitParty, creditParty,
+ * description}}, com as partes trazendo account/taxId/name/branch/bank. Vale para
+ * os dois paths: nenhum consumidor v1 lê campo desta resposta (CelcoinBaas.php:1087
+ * e CartaoController só fazem json_encode pra log), então não há shape v1 a preservar.
+ */
+$party = function (array $raw, string $account): array {
+    return [
+        'account' => $account,
+        'taxId' => (string) ($raw['taxId'] ?? ''),
+        'name' => (string) ($raw['name'] ?? ''),
+        'branch' => (string) ($raw['branch'] ?? '0001'),
+        'bank' => (string) ($raw['bank'] ?? '13935893'),
+    ];
+};
 
-$webhookBody = [
+$transferBody = [
     'id' => $transactionId,
     'amount' => round($amount, 2),
     'clientRequestId' => $clientRequestId,
-    'creditParty' => $transfer['creditParty'],
-    'debitParty' => $transfer['debitParty'],
-    'endToEndId' => gerarHashMock(),
-    'description' => $transfer['description'],
+    'endToEndId' => $endToEndId,
+    'debitParty' => $party($body['debitParty'] ?? [], $debitAccount),
+    'creditParty' => $party($body['creditParty'] ?? [], $creditAccount),
+    'description' => $description !== '' ? $description : 'Transferencia interna',
+];
+
+$transfer = $transferBody + [
+    'transactionId' => $transactionId,
+    'status' => 'PROCESSING',
+    'createdAt' => date(DATE_ATOM),
+];
+
+$response = Cslabs::v2Envelope($transferBody, 'PROCESSING');
+
+$webhookBody = $transferBody + [
     'oldBalance' => null,
     'currentBalance' => null,
 ];
@@ -106,5 +114,6 @@ Cslabs::writeEntity('internal_transfers', $clientRequestId, [
 
 Cslabs::scheduleWebhook('internal-transfer-out', $webhookPayload, 2, $webhookUrl);
 
-http_response_code(201);
-echo json_encode($response, JSON_PRETTY_PRINT);
+// Real responde 200 (não 201) — confirmado em log multi-tenant.
+http_response_code(200);
+echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

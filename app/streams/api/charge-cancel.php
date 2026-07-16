@@ -16,7 +16,8 @@ if (($response['status'] ?? null) === 'ERROR') {
     http_response_code(422);
 }
 
-if (($response['status'] ?? null) === 'SUCCESS') {
+// Sucesso do cancelamento é PROCESSING no real (o CANCELED vem pelo webhook).
+if (($response['status'] ?? null) === 'PROCESSING') {
     $existing = Cslabs::readEntity('charges', $txid);
     if (is_array($existing)) {
         $existing['status'] = 'CANCELLED';

@@ -42,8 +42,29 @@ if (($response['status'] ?? null) === 'SUCCESS') {
             'debitParty' => $body['debitParty'] ?? new stdClass(),
             'creditParty' => $body['creditParty'] ?? new stdClass(),
             'remittanceInformation' => (string) ($body['remittanceInformation'] ?? ''),
+            // Campos de saque/QR que o real sempre devolve (null fora desses fluxos).
+            'transactionIdentification' => $body['transactionIdentification'] ?? null,
+            'recurrencyAccept' => false,
+            'taxIdPaymentInitiator' => null,
+            'vlcpAmount' => null,
+            'vldnAmount' => null,
+            'withdrawalServiceProvider' => null,
+            'withdrawalAgentMode' => null,
         ],
     ];
+
+    /*
+     * O bloco `body` vale para OS DOIS paths, não só o V2: a v1 lê
+     * $retorno->body->id / ->body->endToEndId / ->body->debitParty->account
+     * (modules/pix/models/Pix.php:979-983, sem fallback plano), então enquanto a
+     * resposta era só plana o mov_pix ficava sem transaction_id. Os campos do
+     * topo (status/transactionId/error) seguem porque ConexaoBaas::liquidarPix
+     * lê $resp->status/$resp->error no topo. O real da V2 usa status PROCESSING.
+     */
+    $response['body'] = $state['body'];
+    if (Cslabs::isV2()) {
+        $response['status'] = 'PROCESSING';
+    }
 
     Db::transaction(function () use ($id, $clientCode, $endToEndId, $state) {
         Cslabs::writeEntity('pix_payments', $id, $state);

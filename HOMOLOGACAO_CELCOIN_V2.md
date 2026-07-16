@@ -486,6 +486,8 @@ Formato: `{ "status":"ERROR", "error":{ "errorCode":"<COD>","message":"..." }, "
 
 Legenda: ✅ já responde · 🔁 operação existe no mock em outro path (falta **alias `baas/v2`**) · 🆕 produto novo (mock não tem nada).
 
+> **Status (2026-07-16): implementado e alinhado aos shapes reais.** Os streams que servem v1 e V2 ao mesmo tempo ramificam por path (`Cslabs::isV2()`): o builder devolve o shape v1/plano e o envelope V2 entra no stream — porque os consumidores v1 leem caminhos FIXOS no topo, sem o `?? $response` defensivo da V2 (ver §0). Verificado por `tests/celcoinv2_paths_smoke.php`, que exercita os dois lados de cada branch por HTTP real.
+>
 > **Status (2026-07-15): implementado.** Os 🔁 (aliases `baas/v2/*`) e os 🆕 (dayBalance, charge/pdf, receivement, webhook replay, topups, DICT OTP) já estão no mock — ver `WORK.md` e `tests/celcoinv2_routing_smoke.php`. dayBalance usa o shape real do Apêndice B; topups/receivement/OTP são plausíveis (nenhum tenant exercitou em log) e marcados como inferidos nos streams.
 
 ### Já cobertos (nenhuma ação)

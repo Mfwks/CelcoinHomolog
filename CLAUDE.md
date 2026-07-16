@@ -17,8 +17,12 @@ Ambiente PHP que **simula** o ambiente de homologação da Celcoin. Não chama a
 
 ## Como rodar
 - Apache + `.htaccess` reescreve tudo para `index.php`. Servir o diretório raiz como DocumentRoot.
-- Servidor embutido (`php -S`) **não** consegue rotear sozinho — precisa de Apache (ou nginx replicando a regra).
-- Não há suíte de testes: `tests/` está vazio.
+- Servidor embutido: `php -S 127.0.0.1:8000 index.php` — passar `index.php` como **arquivo de router** reproduz o rewrite do `.htaccess` e roteia tudo. (Sem o router, aí sim `php -S` não roteia.)
+
+## Testes
+- `tests/*_smoke.php`, sem framework: cada um é um script PHP que se auto-verifica e sai com código 1 em falha. Rodar todos: `for t in tests/*_smoke.php; do php "$t"; done`.
+- A maioria chama os builders `Cslabs::*` direto e usa um `TMP` isolado (`tests/tmp_smoke/`). O warning `Constant TMP already defined` é esperado e vai pro **stderr** — não polua o stdout misturando `2>&1`, senão o JSON dos testes funcionais parece inválido.
+- `celcoinv2_paths_smoke.php` é o único funcional: sobe o `php -S` e faz HTTP de verdade, porque testa branching que depende do path do request (`Cslabs::isV2()`) e do corpo lido de `php://input` — nada disso dá pra exercitar chamando builder. Isola o banco via `-d auto_prepend_file=tests/tmp_isolate.php`.
 
 ## Roteamento (resumo)
 `index.php` → `axis.php` (constantes de diretórios) → `app/start.php` (bootstrap) → `app/web.php` (mapa de rotas) → `include app/streams/<stream>.php`.
@@ -38,7 +42,8 @@ Endpoints da API Celcoin ficam em `app/streams/api/`, um arquivo por rota.
 ## O que evitar
 - Chamar API real da Celcoin daqui.
 - Adicionar dependências ao `composer.json` sem necessidade clara — o microframework é deliberadamente sem deps.
-- Criar testes em `tests/` sem alinhamento prévio — não há ferramental escolhido.
+- Adicionar framework de teste (PHPUnit etc.) — os smokes são scripts PHP puros de propósito, seguindo a regra de zero deps.
+- **Mudar shape de stream compartilhado v1/v2 sem checar os dois consumidores.** Vários streams servem os dois paths por alias em `web.php` (`payment-baas`, `key`, `emv`, `internal-transfer`, `wallet-movement`), e a Celcoin real responde shapes diferentes: v1 plano, V2 no envelope `{status, version, body}`. Os consumidores v1 leem caminhos FIXOS no topo, sem fallback. Regra: builder devolve o shape v1, o stream envelopa só quando `Cslabs::isV2()` (ou o path é o da V2). Ver `HOMOLOGACAO_CELCOIN_V2.md` §0.
 - Reintroduzir o prefixo `/celcoin/` em URLs (foi removido em `cc6d0e0`).
 
 ## Onde encontrar o resto

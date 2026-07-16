@@ -24,7 +24,8 @@ if (($response['status'] ?? null) === 'ERROR') {
     http_response_code(422);
 } else {
     Cslabs::writeEntity('brcode_dynamic', $response['body']['transactionId'], $response['body']);
-    http_response_code(201);
+    // Quirk real: HTTP 200, mas o envelope carrega status:201 (int). Ver log em mocks-v2.
+    http_response_code(200);
 }
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

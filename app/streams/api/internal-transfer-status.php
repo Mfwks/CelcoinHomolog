@@ -35,7 +35,16 @@ $transfer = $state['transfer'] ?? [];
 $created = isset($state['transfer']['createdAt']) ? strtotime($state['transfer']['createdAt']) : time();
 $confirmed = (time() - $created) >= 2;
 
-$endToEndId = $state['webhook']['endToEndId'] ?? gerarHashMock();
+/*
+ * O endToEndId tem que ser o MESMO que o POST devolveu e o webhook entregou —
+ * é por ele que o consumidor concilia. Ler de $state['transfer'], que é o que
+ * internal-transfer.php persiste; o envelope do webhook guarda o campo em
+ * ['webhook']['body'], nunca no topo, então o acesso ao topo caía sempre no
+ * gerarHashMock() e a consulta inventava um id novo a cada poll.
+ */
+$endToEndId = $transfer['endToEndId']
+    ?? $state['webhook']['body']['endToEndId']
+    ?? gerarHashMock();
 
 echo json_encode([
     'status' => $confirmed ? 'CONFIRMED' : 'PROCESSING',

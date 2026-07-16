@@ -163,7 +163,11 @@ expect($auth4['assignor'] !== 'CELCOIN INSTITUIÇÃO DE PAGAMENTO - SA', 'boleto
 
 # 9) Após cancelamento, fetch reflete status CANCELLED
 $cancelResp = Cslabs::chargeCancelResponse($txid, ['reason' => 'Teste']);
-expect($cancelResp['status'] === 'SUCCESS', 'cancel SUCCESS');
+# Real: cancelar devolve PROCESSING + a cobrança inteira, em 1.1.0 (o CANCELED vem por webhook).
+expect($cancelResp['status'] === 'PROCESSING', 'cancel PROCESSING (shape real)');
+expect($cancelResp['version'] === '1.1.0', 'cancel version 1.1.0');
+expect(($cancelResp['body']['transactionId'] ?? '') === $txid, 'cancel body = cobrança inteira (transactionId)');
+expect(array_key_exists('chargeType', $cancelResp['body']), 'cancel body traz chargeType (body de cobrança, não recibo)');
 $updated = Cslabs::readEntity('charges', $txid);
 $updated['status'] = 'CANCELLED';
 Cslabs::writeEntity('charges', $txid, $updated);

@@ -96,6 +96,43 @@ ok(($it['status'] ?? '') === 'RESOURCE_CREATED', 'proposal list: status CREATED-
 ok(isset($it['documentscopys'][0]['url']), 'proposal list: documentscopys[].url presente');
 ok(array_key_exists('limit', $pl['body'] ?? []), 'proposal list: body.limit presente');
 
+# 6) BR Code estático — PLANO (a v1 lê emvqrcps/transactionId no topo, sem fallback)
+$bs = Cslabs::brcodeStaticCreateResponse(['key' => 'abc-key', 'amount' => '3041.91']);
+ok(!array_key_exists('body', $bs), 'brcode static: sem envelope body (v1 lê topo)');
+ok(is_int($bs['transactionId'] ?? null), 'brcode static: transactionId é int (real)');
+ok(str_starts_with($bs['emvqrcps'] ?? '', '000201'), 'brcode static: emvqrcps no topo');
+ok(array_key_exists('recurrency', $bs) && $bs['recurrency'] === null, 'brcode static: recurrency null');
+
+# 7) BR Code dinâmico — duplo-envelope preservado (v1 lê caminhos fixos) + status int
+$bd = Cslabs::brcodeDynamicCreateResponse(['key' => 'abc-key', 'amount' => '11.91']);
+ok($bd['status'] === 201, 'brcode dynamic: status é INT 201 (real)');
+ok(isset($bd['body']['body']['dynamicBRCodeData']['emvqrcps']), 'brcode dynamic: body.body.dynamicBRCodeData.emvqrcps (path fixo da v1)');
+ok(isset($bd['body']['body']['amount']['original']), 'brcode dynamic: body.body.amount.original (path fixo da v1)');
+ok(($bd['body']['entity'] ?? '') === 'DynamicBRCode', 'brcode dynamic: entity DynamicBRCode');
+
+# 8) Cancelar cobrança — PROCESSING + cobrança inteira em 1.1.0
+Cslabs::writeEntity('charges', 'chg-1', [
+    'transactionId' => 'chg-1', 'externalId' => '4387954729', 'amount' => 100,
+    'status' => 'PENDING', 'duedate' => '2026-06-18', 'receiver' => ['account' => '495440539'], 'key' => 'k',
+]);
+$cx = Cslabs::chargeCancelResponse('chg-1', ['reason' => 'x']);
+ok(($cx['status'] ?? '') === 'PROCESSING', 'charge cancel: status PROCESSING (não SUCCESS)');
+ok(($cx['version'] ?? '') === '1.1.0', 'charge cancel: version 1.1.0');
+ok(array_key_exists('chargeType', $cx['body'] ?? []), 'charge cancel: body é a cobrança inteira');
+
+# 9) Extrato — paginação no TOPO (irmã de body), item com balanceType/additionalInformation
+$wm = Cslabs::walletMovementResponse(['Account' => '41003245', 'DateFrom' => '2026-05-12', 'DateTo' => '2026-05-13']);
+ok(array_key_exists('totalItems', $wm), 'movement: totalItems no topo');
+ok(array_key_exists('limitPerPage', $wm), 'movement: limitPerPage no topo');
+ok(array_key_exists('dateFrom', $wm), 'movement: dateFrom no topo');
+ok(!array_key_exists('totalItems', $wm['body'] ?? []), 'movement: paginação NÃO fica dentro de body');
+$mv = $wm['body']['movements'][0] ?? [];
+ok(in_array($mv['balanceType'] ?? '', ['DEBIT', 'CREDIT'], true), 'movement: balanceType DEBIT/CREDIT');
+ok(in_array($mv['movementType'] ?? '', ['PIXPAYMENTOUT', 'PIXREVERSALIN'], true), 'movement: movementType real');
+ok(($mv['status'] ?? '') === 'Saldo Liberado', 'movement: status "Saldo Liberado" (texto)');
+ok(isset($mv['additionalInformation']['currentBalance']), 'movement: additionalInformation.currentBalance');
+ok(!array_key_exists('counterParty', $mv), 'movement: counterParty removido (não existe no real)');
+
 if ($fails > 0) {
     echo "\ncelcoinv2 shapes smoke: $fails FALHA(S)\n";
     exit(1);

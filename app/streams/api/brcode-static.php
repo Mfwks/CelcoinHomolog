@@ -20,13 +20,13 @@ if (!is_array($body)) {
 
 $response = Cslabs::brcodeStaticCreateResponse($body);
 
-if (($response['status'] ?? null) === 'ERROR') {
-    http_response_code(422);
+// Sucesso agora é plano (shape real) — só o erro carrega status/error.
+$isError = ($response['status'] ?? null) === 'ERROR';
+
+if (!$isError) {
+    Cslabs::writeEntity('brcode_static', (string) $response['transactionId'], $response + ['key' => $body['key'] ?? null]);
 }
 
-if (($response['status'] ?? null) === 'SUCCESS') {
-    Cslabs::writeEntity('brcode_static', $response['body']['transactionId'], $response['body']);
-}
-
-http_response_code(($response['status'] ?? null) === 'SUCCESS' ? 201 : 422);
+// Real responde 200 no estático (log: "Response [200]"), não 201.
+http_response_code($isError ? 422 : 200);
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
