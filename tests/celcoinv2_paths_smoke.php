@@ -221,6 +221,30 @@ call('POST', '/baas/v2/pix/payment', [
 ok(count($rep['pix'] ?? []) === 1, 'ciclo QR: retry de pagamento não duplica pix[]');
 
 // 7) O link do QR (a própria location) é servido pelo mock.
+# 7b) Imagem do QR: PNG de verdade, não o pixel 1x1 de antes.
+[$rawPng] = call('GET', '/pixqrcode/v2/' . basename($locDin) . '/imagem');
+ok(str_starts_with($rawPng, "\x89PNG\r\n\x1a\n"), 'imagem QR: responde PNG');
+$larguraPng = strlen($rawPng) > 24 ? unpack('N', substr($rawPng, 16, 4))[1] : 0;
+ok($larguraPng > 50, "imagem QR: largura {$larguraPng}px (o placeholder antigo tinha 1px)");
+
+[$rawB64] = call('GET', '/pix/v1/location/' . basename($locDin) . '/base64');
+$b64 = json_decode($rawB64, true);
+$img = base64_decode($b64['base64image'] ?? '', true) ?: '';
+ok(($b64['status'] ?? null) === 0, 'location base64: status 0');
+ok(strlen($img) > 200 && str_starts_with($img, "\x89PNG"), 'location base64: PNG real (>200 bytes)');
+
+// Mesma matriz nas duas rotas — é o mesmo QR, servido de dois jeitos.
+ok($img === $rawPng, 'imagem QR: base64 e binário rendem o MESMO PNG');
+
+// location desconhecida tem que dar 404, não uma imagem qualquer.
+[$rawSemQr] = call('GET', '/pixqrcode/v2/nao-existe-essa-location/imagem');
+ok(str_contains($rawSemQr, 'CBE014'), 'imagem QR: location desconhecida devolve erro, não imagem falsa');
+
+# 7c) Página HTML de visualização
+[$html] = call('GET', '/pixqrcode/v2/' . basename($locDin) . '/ver');
+ok(str_contains($html, '<svg'), 'página do QR: traz o QR embutido em SVG');
+ok(str_contains($html, '73,42'), 'página do QR: mostra o valor da cobrança');
+
 [, $viaLink] = call('GET', '/pixqrcode/v2/' . basename($locDin));
 ok(($viaLink['status'] ?? '') === 'CONCLUIDA' && ($viaLink['txid'] ?? '') === $txidDin, 'ciclo QR: a URL impressa no QR resolve pelo mock');
 

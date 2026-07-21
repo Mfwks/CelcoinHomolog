@@ -58,6 +58,10 @@ $web->add('/pix/v1/location/{locationId}/base64','api/location-base64');
 // No Pix real quem resolve é o PSP recebedor; aqui é o mock, senão o link do QR
 // não devolve nada e a simulação para no meio.
 $web->add('/pixqrcode/v2/{locationId}','api/pix-location');
+// Imagem e página do QR — não existem na Celcoin, são ferramenta de teste do
+// mock (abrir no navegador, apontar a câmera, ver a cobrança virar CONCLUIDA).
+$web->add('/pixqrcode/v2/{locationId}/imagem','api/pix-location-image');
+$web->add('/pixqrcode/v2/{locationId}/ver','api/pix-location-page');
 
 # Charge cancel
 $web->add('/baas/v2/charge','api/charge-fetch'); // GET com TransactionId/ExternalId em query

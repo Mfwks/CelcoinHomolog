@@ -1484,12 +1484,67 @@ class Cslabs
         ];
     }
 
+    /**
+     * Imagem do QR estático em base64.
+     *
+     * Antes devolvia um PNG de 1x1 pixel transparente para QUALQUER id — status
+     * 0 e `base64image` plausível, imagem vazia. Agora renderiza o BR Code
+     * realmente emitido; id desconhecido vira erro explícito, porque devolver
+     * uma imagem qualquer é pior do que devolver erro.
+     */
     public static function brcodeStaticBase64Response(string $transactionId, string $imageType = 'png'): array
     {
+        $emv = self::brcodeEmvForStatic($transactionId);
+
+        if ($emv === null) {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'QR Code não encontrado para o transactionId informado.'],
+            ];
+        }
+
         return [
             'status' => 0,
-            'base64image' => self::onePixelImageBase64($imageType),
+            'base64image' => base64_encode(QrCode::png(QrCode::encode($emv), 6, 4)),
         ];
+    }
+
+    /** Imagem do QR dinâmico em base64, localizada pelo id da `location`. */
+    public static function locationBase64Response(string $locationId): array
+    {
+        $emv = self::brcodeEmvForLocation($locationId);
+
+        if ($emv === null) {
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => ['errorCode' => 'CBE014', 'message' => 'QR Code não encontrado para a location informada.'],
+            ];
+        }
+
+        return [
+            'status' => 0,
+            'base64image' => base64_encode(QrCode::png(QrCode::encode($emv), 6, 4)),
+        ];
+    }
+
+    /** EMV do QR dinâmico gravado na criação, ou null se a location é desconhecida. */
+    public static function brcodeEmvForLocation(string $locationId): ?string
+    {
+        $stored = self::readEntity('brcode_dynamic_by_location', trim($locationId));
+        $emv = $stored['body']['dynamicBRCodeData']['emvqrcps'] ?? null;
+
+        return is_string($emv) && $emv !== '' ? $emv : null;
+    }
+
+    /** EMV do QR estático gravado na criação, ou null se o id é desconhecido. */
+    public static function brcodeEmvForStatic(string $transactionId): ?string
+    {
+        $stored = self::readEntity('brcode_static', trim($transactionId));
+        $emv = $stored['emvqrcps'] ?? null;
+
+        return is_string($emv) && $emv !== '' ? $emv : null;
     }
 
     public static function emvDecodeResponse(array $payload): array
