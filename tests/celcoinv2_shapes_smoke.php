@@ -110,6 +110,72 @@ ok(isset($bd['body']['body']['dynamicBRCodeData']['emvqrcps']), 'brcode dynamic:
 ok(isset($bd['body']['body']['amount']['original']), 'brcode dynamic: body.body.amount.original (path fixo da v1)');
 ok(($bd['body']['entity'] ?? '') === 'DynamicBRCode', 'brcode dynamic: entity DynamicBRCode');
 
+# 7b) O EMV precisa ser um BR Code dinâmico DE VERDADE (escaneável), não só uma string.
+# Referência real (mocks-v2, tenant confiapay):
+# 00020101021226910014br.gov.bcb.pix2569qrcode.pix.celcoin.com.br/pixqrcode/v2/
+# 926f4a26fba9292613efe87c6dbe985204000053039865802BR5922Confia Capital SAAS SA
+# 6009Sao Pedro62070503***63046C21
+$crc16 = function (string $s): string {
+    $crc = 0xFFFF;
+    for ($i = 0, $n = strlen($s); $i < $n; $i++) {
+        $crc ^= ord($s[$i]) << 8;
+        for ($b = 0; $b < 8; $b++) {
+            $crc = ($crc & 0x8000) ? (($crc << 1) ^ 0x1021) & 0xFFFF : ($crc << 1) & 0xFFFF;
+        }
+    }
+    return strtoupper(sprintf('%04X', $crc));
+};
+$tlv = function (string $s): array {
+    $out = [];
+    $i = 0;
+    while ($i + 4 <= strlen($s)) {
+        $id = substr($s, $i, 2);
+        $len = (int) substr($s, $i + 2, 2);
+        $out[$id] = substr($s, $i + 4, $len);
+        $i += 4 + $len;
+    }
+    return $out;
+};
+
+$bdReal = Cslabs::brcodeDynamicCreateResponse([
+    'key' => 'cab8f3ed-18ae-4cb1-a5a1-1d525a4e86fd',
+    'amount' => '11.91',
+    'expiration' => 3600,
+    'clientRequestId' => '4d6877ca-2ebd-4785-969f-af866c488736',
+    'merchant' => ['merchantCategoryCode' => '0000', 'city' => 'Sao Pedro', 'name' => 'Confia Capital SAAS S/A'],
+]);
+$emvD = $bdReal['body']['body']['dynamicBRCodeData']['emvqrcps'];
+$tD = $tlv($emvD);
+ok($crc16(substr($emvD, 0, -4)) === substr($emvD, -4), 'brcode dynamic: CRC16 do EMV é válido (era fixo "ABCD")');
+ok(($tD['01'] ?? '') === '12', 'brcode dynamic: tag 01 = 12 (point of initiation dinâmico)');
+ok(str_contains($tD['26'] ?? '', '25') && str_contains($tD['26'] ?? '', 'pixqrcode/v2/'), 'brcode dynamic: tag 26 carrega a URL (subtag 25), não a chave');
+ok(!isset($tD['54']), 'brcode dynamic: sem tag 54 — o valor vive no payload da URL');
+ok(($tD['59'] ?? '') === 'Confia Capital SAAS SA', 'brcode dynamic: merchantName sanitizado (barra removida, como no real)');
+ok(($tD['62'] ?? '') === '0503***', 'brcode dynamic: tag 62/05 = *** (real)');
+ok(is_float($bdReal['body']['body']['amount']['original']), 'brcode dynamic: amount.original é numérico (real: 11.91)');
+ok(is_string($bdReal['body']['transactionId']) && ctype_digit($bdReal['body']['transactionId']), 'brcode dynamic: transactionId string de dígitos (real)');
+ok(array_key_exists('pactualId', $bdReal['body']) && $bdReal['body']['pactualId'] === null, 'brcode dynamic: pactualId null (real)');
+ok(($bdReal['body']['body']['dynamicBRCodeData']['transactionCurrency'] ?? 0) === 986, 'brcode dynamic: transactionCurrency 986');
+ok(($bdReal['body']['body']['location'] ?? '') === ($bdReal['body']['body']['dynamicBRCodeData']['merchantAccountInformation']['url'] ?? 'x'), 'brcode dynamic: location == merchantAccountInformation.url');
+ok(str_contains($emvD, $bdReal['body']['body']['location']), 'brcode dynamic: a URL do EMV é a mesma location');
+
+# 7c) Estático: bate BYTE A BYTE com um EMV real (mesma entrada → mesma saída).
+$emvS = Cslabs::brcodeStaticCreateResponse([
+    'key' => '40088609839',
+    'amount' => '10.00',
+    'merchant' => ['city' => 'Sao Bernardo do Campo', 'name' => 'Marlene dos Santos Silves', 'postalCode' => '09851320'],
+])['emvqrcps'];
+$esperado = '00020126330014br.gov.bcb.pix011140088609839520400005303986540510.005802BR'
+    . '5924Marlene dos Santos Silve6014Sao Bernardo d610909851-32062070503***6304B55D';
+ok($emvS === $esperado, 'brcode static: EMV idêntico ao real (nome 24 / cidade 14 / CEP 61 / CRC)');
+
+# 7d) A location do QR dinâmico resolve para o MESMO valor/chave que o QR carrega.
+Cslabs::writeEntity('brcode_dynamic_by_location', basename($bdReal['body']['body']['location']), $bdReal['body']);
+$pl2 = Cslabs::collectionPayloadResponse($bdReal['body']['body']['location']);
+ok(($pl2['valor']['original'] ?? '') === '11.91', 'collection payload: valor vem do QR criado, não sintético');
+ok(($pl2['chave'] ?? '') === 'cab8f3ed-18ae-4cb1-a5a1-1d525a4e86fd', 'collection payload: chave vem do QR criado');
+ok(($pl2['calendario']['expiracao'] ?? 0) === 3600, 'collection payload: expiração vem do QR criado');
+
 # 8) Cancelar cobrança — PROCESSING + cobrança inteira em 1.1.0
 Cslabs::writeEntity('charges', 'chg-1', [
     'transactionId' => 'chg-1', 'externalId' => '4387954729', 'amount' => 100,

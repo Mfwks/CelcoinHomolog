@@ -54,6 +54,10 @@ $web->add('/pix/v1/brcode/static','api/brcode-static');
 $web->add('/pix/v1/brcode/dynamic','api/brcode-dynamic');
 $web->add('/pix/v1/collection/immediate','api/brcode-dynamic'); // mesmo retorno; alias
 $web->add('/pix/v1/location/{locationId}/base64','api/location-base64');
+// A própria URL impressa no QR dinâmico (campo `location`, tag 26/25 do EMV).
+// No Pix real quem resolve é o PSP recebedor; aqui é o mock, senão o link do QR
+// não devolve nada e a simulação para no meio.
+$web->add('/pixqrcode/v2/{locationId}','api/pix-location');
 
 # Charge cancel
 $web->add('/baas/v2/charge','api/charge-fetch'); // GET com TransactionId/ExternalId em query

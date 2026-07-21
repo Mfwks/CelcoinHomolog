@@ -37,15 +37,17 @@ if (($response['status'] ?? null) === 'ERROR') {
      */
     $mai = $response['merchantAccountInformation'];
     $amount = (float) $response['transactionAmount'];
+    $isDynamic = $response['collection'] === '1';
 
     $response = [
         'version' => '1.0.0',
         'status' => 200,
         'body' => [
-            'type' => $response['collection'] === '1' ? 'IMMEDIATE' : 'STATIC',
+            'type' => $isDynamic ? 'IMMEDIATE' : 'STATIC',
             'merchantAccountInformation' => [
-                'url' => $mai['url'],
-                'gui' => $mai['gui'],
+                // No QR estático o real devolve url E gui nulos (mocks-v2).
+                'url' => $isDynamic ? $mai['url'] : null,
+                'gui' => $isDynamic ? $mai['gui'] : null,
                 'merchantCategoryCode' => '0000',
                 'additionaldata' => null,
                 'withdrawalServiceProvider' => null,
@@ -66,7 +68,12 @@ if (($response['status'] ?? null) === 'ERROR') {
                 'change' => null,
             ],
             'transactionIdentification' => $response['transactionIdentification'],
-            'payload' => [
+            /*
+             * `payload` é a cobrança por trás da location — só existe no QR
+             * dinâmico. No estático o real manda null (mocks-v2, 14 amostras),
+             * e antes daqui saía o objeto nos dois casos.
+             */
+            'payload' => $isDynamic ? [
                 'status' => 'ACTIVE',
                 'revision' => 0,
                 'calendar' => [
@@ -75,8 +82,13 @@ if (($response['status'] ?? null) === 'ERROR') {
                     'dueDate' => null,
                     'validateAfterDuedate' => null,
                     'expiration' => 3946686,
+                    'expirationDate' => gmdate('Y-m-d\TH:i:s.v\Z', time() + 86400),
                 ],
-            ],
+                'debtor' => ['cpf' => null, 'cnpj' => null, 'name' => null],
+                'receiver' => null,
+                'payerQuestion' => null,
+                'additionalInformation' => null,
+            ] : null,
         ],
     ];
 }

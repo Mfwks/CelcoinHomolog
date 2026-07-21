@@ -652,6 +652,27 @@ class Cslabs
             return self::paymentError($scenario);
         }
 
+        /*
+         * Regra REAL da Celcoin (log em mocks-v2, 2 de 4 pagamentos de QR
+         * falharam assim): com initiationType STATIC_QRCODE o
+         * transactionIdentification não pode passar de 25 caracteres. Pega em
+         * cheio quem lê um QR dinâmico (txid de 35 chars) e paga como estático.
+         */
+        $initiationType = strtoupper(trim((string) ($payload['initiationType'] ?? '')));
+        $txIdentification = (string) ($payload['transactionIdentification'] ?? '');
+
+        if ($initiationType === 'STATIC_QRCODE' && strlen($txIdentification) > 25) {
+            self::$lastErrorScenario = 'error';
+            return [
+                'status' => 'ERROR',
+                'version' => '1.0.0',
+                'error' => [
+                    'errorCode' => 'CBE136',
+                    'message' => 'Quando initiationType igual a STATIC_QRCODE o campo transactionIdentification não pode ultrapassar 25 caracteres.',
+                ],
+            ];
+        }
+
         $amount = (float) ($payload['amount'] ?? $payload['value'] ?? 1);
         $clientRequestId = trim((string) ($payload['clientRequestId'] ?? gerarHashMock()));
         $transactionId = 'pix_' . substr(hash('sha256', $clientRequestId), 0, 24);
@@ -1011,9 +1032,19 @@ class Cslabs
          * sem fallback). Enquanto isso ficou dentro de body, a v1 recebia null.
          * transactionId é INT no real. Ver HOMOLOGACAO_CELCOIN_V2.md §4.8.
          */
+        $merchant = is_array($payload['merchant'] ?? null) ? $payload['merchant'] : [];
+
         return [
             'transactionId' => $transactionId,
-            'emvqrcps' => self::buildEmv($key, $amount, $transactionIdentification),
+            'emvqrcps' => self::buildEmv(
+                $key,
+                $amount,
+                $transactionIdentification,
+                (string) ($merchant['name'] ?? 'CSLABS MOCK'),
+                (string) ($merchant['city'] ?? 'SAO PAULO'),
+                (string) ($merchant['postalCode'] ?? ''),
+                (string) ($merchant['merchantCategoryCode'] ?? '0000')
+            ),
             'transactionIdentification' => $transactionIdentification,
             'recurrency' => null,
         ];
@@ -1032,15 +1063,23 @@ class Cslabs
             ];
         }
 
-        $transactionId = gerarHashMock();
-        $pactualId = gerarHashMock();
-        $locationId = substr(hash('sha256', $clientRequestId), 0, 24);
-        // Doc oficial: amount no QR dinâmico é string (default "5000.00"), diferente do estático (double).
+        /*
+         * transactionId real é uma STRING de 10 dígitos ("3026988995"), não hash.
+         * pactualId vem null. locationId tem 30 hex. Log real em mocks-v2.
+         */
+        $transactionId = (string) random_int(1000000000, 9999999999);
+        $locationId = substr(hash('sha256', $clientRequestId), 0, 30);
         $amountInput = $payload['amount'] ?? null;
         $amountStr = ($amountInput === null || $amountInput === '')
             ? '5000.00'
             : number_format((float) $amountInput, 2, '.', '');
         $expiration = (int) ($payload['expiration'] ?? 86400);
+
+        $merchant = is_array($payload['merchant'] ?? null) ? $payload['merchant'] : [];
+        $merchantName = (string) ($merchant['name'] ?? 'CSLABS MOCK');
+        $merchantCity = (string) ($merchant['city'] ?? 'SAO PAULO');
+        $mcc = (string) ($merchant['merchantCategoryCode'] ?? '0000');
+        $location = self::brcodeLocationHost() . '/pixqrcode/v2/' . $locationId;
 
         /*
          * O duplo-envelope aqui NÃO é acidente: a v1 lê caminhos fixos
@@ -1058,9 +1097,9 @@ class Cslabs
             'status' => 201,
             'body' => [
                 'clientRequestId' => $clientRequestId,
-                'pactualId' => $pactualId,
+                'pactualId' => null,
                 'transactionId' => $transactionId,
-                'createTimestamp' => gmdate('Y-m-d\TH:i:s.v\Z', $now),
+                'createTimestamp' => self::dotNetTimestamp($now, true),
                 'lastUpdateTimestamp' => '0001-01-01T00:00:00',
                 'entity' => 'DynamicBRCode',
                 'status' => 'ACTIVE',
@@ -1069,19 +1108,29 @@ class Cslabs
                 'body' => [
                     'key' => $key,
                     'revision' => '0',
-                    'location' => 'qrcode.pix.celcoin.com.br/pixqrcode/v2/cobv/' . $locationId,
+                    'location' => $location,
                     'debtor' => ['name' => null, 'cpf' => null, 'cnpj' => null],
-                    'amount' => ['original' => $amountStr],
+                    // NUMÉRICO no real (11.91) — ao contrário do transactionAmount abaixo, que é string.
+                    'amount' => ['original' => (float) $amountStr],
                     'calendar' => [
                         'expiration' => $expiration,
-                        'dueDate' => gmdate('Y-m-d\TH:i:s.v', $now + $expiration),
+                        // Real: horário LOCAL (America/Sao_Paulo) + expiration, sem sufixo Z.
+                        'dueDate' => self::dotNetTimestamp($now - 10800 + $expiration, false),
                     ],
                     'dynamicBRCodeData' => [
-                        'emvqrcps' => self::buildEmv($key, $amountStr, $clientRequestId),
-                        'merchantAccountInformation' => [
-                            'url' => 'qrcode.pix.celcoin.com.br/pixqrcode/v2/cobv/' . $locationId,
-                        ],
+                        'pointOfInitiationMethod' => '12',
+                        'payloadFormatIndicator' => '01',
+                        'countryCode' => 'BR',
+                        'merchantName' => $merchantName,
+                        'merchantCity' => $merchantCity,
+                        'transactionIdentification' => '***',
+                        'transactionAmount' => $amountStr,
+                        'emvqrcps' => self::buildDynamicEmv($location, $merchantName, $merchantCity, $mcc),
+                        'merchantCategoryCode' => (int) $mcc,
+                        'transactionCurrency' => 986,
+                        'merchantAccountInformation' => ['url' => $location],
                     ],
+                    'additionalInformation' => null,
                 ],
             ],
         ];
@@ -1201,19 +1250,217 @@ class Cslabs
         ];
     }
 
-    private static function buildEmv(string $key, string $amount, string $txid): string
+    /**
+     * Campo TLV do BR Code: id (2) + tamanho (2, zero-padded) + valor.
+     */
+    private static function emvTlv(string $id, string $value): string
     {
-        $key = substr($key, 0, 77);
-        $merchantInfo = sprintf('0014br.gov.bcb.pix01%02d%s', strlen($key), $key);
-        $additional = sprintf('05%02d%s', strlen($txid), substr($txid, 0, 25));
+        return $id . sprintf('%02d', strlen($value)) . $value;
+    }
 
-        return sprintf(
-            '000201%s5204000053039865%s5802BR5910CSLABS-MOCK6009SAO PAULO62%02d%s6304ABCD',
-            sprintf('26%02d%s', strlen($merchantInfo), $merchantInfo),
-            $amount !== '' && $amount !== '0.00' ? sprintf('54%02d%s', strlen($amount), $amount) : '',
-            strlen($additional),
-            $additional
-        );
+    /**
+     * CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF), 4 hex maiúsculos.
+     * É o que o BR Code exige no campo 63 — e o que os EMVs reais da Celcoin
+     * usam (conferido contra `mocks-v2`: os 4 dígitos finais batem).
+     * O `$payload` já deve terminar em "6304".
+     */
+    private static function emvCrc16(string $payload): string
+    {
+        $crc = 0xFFFF;
+
+        for ($i = 0, $len = strlen($payload); $i < $len; $i++) {
+            $crc ^= ord($payload[$i]) << 8;
+            for ($bit = 0; $bit < 8; $bit++) {
+                $crc = ($crc & 0x8000) ? (($crc << 1) ^ 0x1021) & 0xFFFF : ($crc << 1) & 0xFFFF;
+            }
+        }
+
+        return strtoupper(sprintf('%04X', $crc));
+    }
+
+    /**
+     * Normaliza texto para o charset do BR Code (ASCII imprimível, sem acento).
+     * A Celcoin real remove a barra: "Confia Capital SAAS S/A" vira
+     * "Confia Capital SAAS SA" no EMV (log real em mocks-v2).
+     */
+    private static function emvText(string $value, int $max): string
+    {
+        $ascii = @iconv('UTF-8', 'ASCII//TRANSLIT', $value);
+        $value = $ascii === false ? $value : $ascii;
+        $value = preg_replace('/[^A-Za-z0-9 .,\-]/', '', $value) ?? '';
+
+        return substr(trim($value), 0, $max);
+    }
+
+    /**
+     * BR Code ESTÁTICO. Shape conferido contra EMVs reais em `mocks-v2`, ex.:
+     * 00020126330014br.gov.bcb.pix011140088609839520400005303986540510.00
+     * 5802BR5924Marlene dos Santos Silve6014Sao Bernardo d610909851-320
+     * 62070503***6304B55D
+     * Sem tag 01 (point of initiation), com 54 (valor) e 61 (CEP) opcionais,
+     * e 62/05 SEMPRE "***" — o identificador de verdade volta no campo
+     * `transactionIdentification` da response, não dentro do EMV.
+     */
+    private static function buildEmv(
+        string $key,
+        string $amount,
+        string $txid,
+        string $merchantName = 'CSLABS MOCK',
+        string $merchantCity = 'SAO PAULO',
+        string $postalCode = '',
+        string $mcc = '0000'
+    ): string {
+        $merchantInfo = '0014br.gov.bcb.pix' . self::emvTlv('01', substr($key, 0, 77));
+        $postalCode = preg_replace('/\D+/', '', $postalCode) ?? '';
+
+        $payload = '000201'
+            . self::emvTlv('26', $merchantInfo)
+            . self::emvTlv('52', substr($mcc, 0, 4) ?: '0000')
+            . self::emvTlv('53', '986')
+            . ($amount !== '' && $amount !== '0.00' ? self::emvTlv('54', $amount) : '')
+            . self::emvTlv('58', 'BR')
+            . self::emvTlv('59', self::emvText($merchantName, 24) ?: 'CSLABS MOCK')
+            . self::emvTlv('60', self::emvText($merchantCity, 14) ?: 'SAO PAULO')
+            . ($postalCode !== '' ? self::emvTlv('61', self::formatPostalCode($postalCode)) : '')
+            . self::emvTlv('62', self::emvTlv('05', '***'))
+            . '6304';
+
+        return $payload . self::emvCrc16($payload);
+    }
+
+    /**
+     * BR Code DINÂMICO. Difere do estático em quatro pontos, todos confirmados
+     * nos logs reais (`mocks-v2`), ex.:
+     * 00020101021226910014br.gov.bcb.pix2569qrcode.pix.celcoin.com.br/
+     * pixqrcode/v2/926f4a26fba9292613efe87c6dbe985204000053039865802BR
+     * 5922Confia Capital SAAS SA6009Sao Pedro62070503***63046C21
+     *   1. tag 01 = "12" (point of initiation method: uso único/dinâmico);
+     *   2. tag 26 carrega a URL (subtag 25), NÃO a chave Pix (subtag 01);
+     *   3. sem tag 54 — o valor vive no payload servido pela URL, não no QR;
+     *   4. sem tag 61 (CEP).
+     */
+    private static function buildDynamicEmv(
+        string $locationUrl,
+        string $merchantName,
+        string $merchantCity,
+        string $mcc = '0000'
+    ): string {
+        $merchantInfo = '0014br.gov.bcb.pix' . self::emvTlv('25', $locationUrl);
+
+        $payload = '000201'
+            . self::emvTlv('01', '12')
+            . self::emvTlv('26', $merchantInfo)
+            . self::emvTlv('52', substr($mcc, 0, 4) ?: '0000')
+            . self::emvTlv('53', '986')
+            . self::emvTlv('58', 'BR')
+            . self::emvTlv('59', self::emvText($merchantName, 24) ?: 'CSLABS MOCK')
+            . self::emvTlv('60', self::emvText($merchantCity, 14) ?: 'SAO PAULO')
+            . self::emvTlv('62', self::emvTlv('05', '***'))
+            . '6304';
+
+        return $payload . self::emvCrc16($payload);
+    }
+
+    /**
+     * Host (sem esquema, como manda o BR Code) da `location` do QR dinâmico.
+     *
+     * O real usa `qrcode.pix.celcoin.com.br`. Aqui apontamos para o PRÓPRIO
+     * mock de propósito: o `locationId` é gerado localmente, então a Celcoin não
+     * tem cobrança com esse id e a URL real só devolveria erro — enquanto esta
+     * resolve de verdade (rota `pixqrcode/v2/{locationId}`). É a única
+     * divergência deliberada do EMV em relação ao real; para voltar à grafia da
+     * Celcoin, é só trocar o retorno desta função.
+     */
+    private static function brcodeLocationHost(): string
+    {
+        $host = defined('DOMAIN') ? (string) DOMAIN : 'cslabs.mfwks.com';
+        $base = defined('BASE') ? trim((string) BASE, '/') : '';
+
+        return $base === '' ? $host : $host . '/' . $base;
+    }
+
+    /**
+     * Faz o parse TLV de um BR Code. Devolve os campos de primeiro nível; os
+     * compostos (26 = merchant account information, 62 = additional data) vêm
+     * com os subcampos já resolvidos em `26.01`, `26.25`, `62.05`, etc.
+     * Retorna [] se o payload não for TLV válido.
+     */
+    public static function emvParse(string $emv): array
+    {
+        $emv = trim($emv);
+        $out = [];
+        $i = 0;
+        $len = strlen($emv);
+
+        while ($i + 4 <= $len) {
+            $id = substr($emv, $i, 2);
+            $size = substr($emv, $i + 2, 2);
+
+            if (!ctype_digit($id) || !ctype_digit($size)) {
+                return [];
+            }
+
+            $size = (int) $size;
+            if ($i + 4 + $size > $len) {
+                return [];
+            }
+
+            $value = substr($emv, $i + 4, $size);
+            $out[$id] = $value;
+            $i += 4 + $size;
+
+            // 26–51 (merchant account information) e 62 (additional data) são compostos.
+            if (($id >= '26' && $id <= '51') || $id === '62') {
+                $j = 0;
+                while ($j + 4 <= strlen($value)) {
+                    $sid = substr($value, $j, 2);
+                    $ssize = substr($value, $j + 2, 2);
+                    if (!ctype_digit($sid) || !ctype_digit($ssize)) {
+                        break;
+                    }
+                    $ssize = (int) $ssize;
+                    if ($j + 4 + $ssize > strlen($value)) {
+                        break;
+                    }
+                    $out[$id . '.' . $sid] = substr($value, $j + 4, $ssize);
+                    $j += 4 + $ssize;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Confere o CRC do campo 63 contra o payload. Um BR Code adulterado (ou
+     * inventado) falha aqui — é a validação que qualquer app de banco faz.
+     */
+    public static function emvCrcIsValid(string $emv): bool
+    {
+        $emv = trim($emv);
+        $pos = strrpos($emv, '6304');
+
+        if ($pos === false || $pos !== strlen($emv) - 8) {
+            return false;
+        }
+
+        return strcasecmp(self::emvCrc16(substr($emv, 0, -4)), substr($emv, -4)) === 0;
+    }
+
+    /**
+     * Timestamp com 7 casas de fração (ticks .NET) — é como a Celcoin serializa
+     * `createTimestamp` ("2026-07-03T19:50:35.9688673Z") e `calendar.dueDate`
+     * (sem o Z). O PHP só vai até microssegundo, então as 7 casas saem de `u`+0.
+     */
+    private static function dotNetTimestamp(int $ts, bool $utcSuffix): string
+    {
+        return gmdate('Y-m-d\TH:i:s', $ts) . '.' . str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT) . '0'
+            . ($utcSuffix ? 'Z' : '');
+    }
+
+    private static function formatPostalCode(string $digits): string
+    {
+        return strlen($digits) === 8 ? substr($digits, 0, 5) . '-' . substr($digits, 5) : $digits;
     }
 
     public static function walletBalanceResponse(string $document): array
@@ -1258,11 +1505,51 @@ class Cslabs
         }
 
         $seed = hash('sha256', $emv);
-        $isStatic = !str_contains($emv, 'gov.bcb.pix/url') && !preg_match('/[0-9a-f]{8}-/', $emv);
-        $key = self::extractFromEmv($emv) ?? (gerarHashMock());
+
+        /*
+         * Antes isto não decodificava nada: valor, chave e txid saíam de um
+         * hash do EMV. Ou seja, ler um QR gerado aqui devolvia dados que não
+         * eram os do QR, e pagar por esse caminho era pagar outra coisa.
+         * Agora fazemos o parse TLV de verdade; o sintético só sobrou como
+         * fallback para EMV que não é BR Code válido (é o que os smokes usam).
+         */
+        $tags = self::emvParse($emv);
+        $isStatic = !isset($tags['26.25']) && ($tags['01'] ?? '') !== '12';
+        $key = self::extractFromEmv($emv) ?? gerarHashMock();
         $url = 'pix.celcoin.com.br/pix/v2/' . substr($seed, 0, 24);
         $amount = round((hexdec(substr($seed, 0, 6)) % 10000) / 100, 2);
         $txid = 'TXID' . strtoupper(substr($seed, 0, 28));
+        $additionalInformation = '';
+        $merchantName = null;
+        $merchantCity = 'SAO PAULO';
+        $postalCode = null;
+
+        if ($tags !== []) {
+            $merchantName = $tags['59'] ?? null;
+            $merchantCity = $tags['60'] ?? $merchantCity;
+            $postalCode = $tags['61'] ?? null;
+            // 62/05 é "***" nos QRs reais; nesse caso não há txid no próprio EMV.
+            $emvTxid = (string) ($tags['62.05'] ?? '');
+            $txid = ($emvTxid !== '' && $emvTxid !== '***') ? $emvTxid : $txid;
+
+            if ($isStatic) {
+                $key = (string) ($tags['26.01'] ?? $key);
+                $amount = isset($tags['54']) ? (float) $tags['54'] : 0.0;
+                $url = '';
+            } else {
+                $url = (string) $tags['26.25'];
+                /*
+                 * QR dinâmico não carrega chave nem valor no EMV — eles vivem na
+                 * cobrança apontada pela `location`. A Celcoin resolve isso do
+                 * lado dela; aqui resolvemos pelo mesmo índice que a criação
+                 * gravou, para o pagador ler EXATAMENTE o que foi cobrado.
+                 */
+                $cob = self::cobPayloadForLocation(basename(rtrim($url, '/')));
+                $key = (string) ($cob['chave'] ?? $key);
+                $amount = (float) ($cob['valor']['original'] ?? 0);
+                $txid = (string) ($cob['txid'] ?? $txid);
+            }
+        }
 
         return [
             'type' => $isStatic ? '1' : '2',
@@ -1272,16 +1559,18 @@ class Cslabs
                 'url' => $url,
                 'gui' => 'br.gov.bcb.pix',
                 'key' => $key,
-                'additionalInformation' => '',
+                // A v1 lê este campo SEM `??` mesmo em QR dinâmico
+                // (CelcoinPix::consultaQRCode:1322) — nunca pode sumir.
+                'additionalInformation' => $additionalInformation,
                 'withdrawalServiceProvider' => null,
             ],
             'merchantCategoryCode' => 0,
             'transactionCurrency' => 0,
             'transactionAmount' => $amount,
-            'countryCode' => null,
-            'merchantName' => null,
-            'merchantCity' => 'SAO PAULO',
-            'postalCode' => null,
+            'countryCode' => $tags !== [] ? ($tags['58'] ?? null) : null,
+            'merchantName' => $merchantName,
+            'merchantCity' => $merchantCity,
+            'postalCode' => $postalCode,
             'initiationMethod' => null,
             'transactionIdentification' => $txid,
         ];
@@ -1298,14 +1587,61 @@ class Cslabs
             ];
         }
 
-        $seed = hash('sha256', $payloadUrl);
+        /*
+         * O último segmento da URL é o locationId — a mesma chave que a criação
+         * do QR dinâmico gravou. Sem isso o payload servido pela `location` não
+         * teria relação nenhuma com o QR que o pagador leu.
+         */
+        return self::cobPayloadForLocation(
+            basename(rtrim(parse_url($payloadUrl, PHP_URL_PATH) ?: $payloadUrl, '/')),
+            $payloadUrl
+        );
+    }
+
+    /**
+     * Dados da cobrança apontada por uma `location` de QR dinâmico.
+     *
+     * SHAPE INFERIDO — auditoria do corpus real (`mocks-v2`, 14 tenants) não
+     * encontrou NENHUMA chamada a `pix/v1/collection/…/payload/…`, nem os campos
+     * PT-BR abaixo, nem os status ATIVA/CONCLUIDA. A base aqui é o spec do
+     * Bacen + o que o consumidor efetivamente lê: `chave|key`,
+     * `valor.original|amount.original` e `txid|transactionIdentification`
+     * (CelcoinPix::consultaQRCode:1307,1324,1328). Revisar se um log real
+     * aparecer.
+     *
+     * Se o QR foi criado neste mock, devolve os dados REAIS dele (valor, chave,
+     * txid, calendário) e — se já foi pago — status CONCLUIDA com o bloco `pix`.
+     * Para uma location desconhecida cai no sintético determinístico de antes,
+     * para não quebrar quem só quer um payload qualquer.
+     */
+    public static function cobPayloadForLocation(string $locationId, string $seedSource = ''): array
+    {
+        $locationId = trim($locationId);
+        $seed = hash('sha256', $seedSource !== '' ? $seedSource : $locationId);
+
         $amount = number_format(round((hexdec(substr($seed, 0, 6)) % 10000) / 100, 2), 2, '.', '');
         $txid = 'TXID' . strtoupper(substr($seed, 0, 28));
         $key = substr($seed, 0, 8) . '-' . substr($seed, 8, 4) . '-' . substr($seed, 12, 4) . '-' . substr($seed, 16, 4) . '-' . substr($seed, 20, 12);
-        $now = gmdate('Y-m-d\TH:i:s\Z');
+        $criacao = gmdate('Y-m-d\TH:i:s\Z');
+        $expiration = 300;
+        $status = 'ATIVA';
+        $pagamentos = [];
 
-        return [
-            'status' => 'ACTIVE',
+        $stored = $locationId !== '' ? self::readEntity('brcode_dynamic_by_location', $locationId) : false;
+
+        if (is_array($stored)) {
+            $inner = $stored['body'] ?? [];
+            $amount = number_format((float) ($inner['amount']['original'] ?? 0), 2, '.', '');
+            $txid = (string) ($stored['transactionIdentification'] ?? $txid);
+            $key = (string) ($inner['key'] ?? $key);
+            $expiration = (int) ($inner['calendar']['expiration'] ?? $expiration);
+            $criacao = (string) ($stored['createTimestamp'] ?? $criacao);
+            $pagamentos = is_array($stored['pix'] ?? null) ? $stored['pix'] : [];
+            $status = $pagamentos !== [] ? 'CONCLUIDA' : 'ATIVA';
+        }
+
+        $out = [
+            'status' => $status,
             'infoAdicionais' => [],
             'txid' => $txid,
             'chave' => $key,
@@ -1321,13 +1657,105 @@ class Cslabs
                 'retirada' => null,
             ],
             'calendario' => [
-                'criacao' => $now,
-                'expiracao' => 300,
+                'criacao' => $criacao,
+                'expiracao' => $expiration,
                 'apresentacao' => gmdate('Y-m-d\TH:i:s.v\Z'),
                 'validadeAposVencimento' => 0,
             ],
             'revisao' => 0,
         ];
+
+        // Só existe depois de pago — é o que muda ATIVA para CONCLUIDA.
+        if ($pagamentos !== []) {
+            $out['pix'] = $pagamentos;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Liquida a cobrança de um QR dinâmico: registra o pagamento recebido e faz
+     * a `location` passar de ATIVA para CONCLUIDA, como no Pix real.
+     *
+     * O elo é o `transactionIdentification` — é o que o consumidor lê da
+     * location e devolve no pagamento (initiationType DYNAMIC_QRCODE, ver
+     * CelcoinPix::enviarPix). Devolve false quando o txid não é de um QR
+     * criado aqui (pagamento de QR de terceiro), sem efeito colateral.
+     */
+    public static function settleDynamicBrcode(string $transactionIdentification, array $pagamento): bool
+    {
+        $transactionIdentification = trim($transactionIdentification);
+
+        if ($transactionIdentification === '') {
+            return false;
+        }
+
+        $ref = self::readEntity('brcode_dynamic_by_txid', $transactionIdentification);
+
+        if (!is_array($ref) || empty($ref['locationId'])) {
+            return false;
+        }
+
+        $locationId = (string) $ref['locationId'];
+        $stored = self::readEntity('brcode_dynamic_by_location', $locationId);
+
+        if (!is_array($stored)) {
+            return false;
+        }
+
+        // Idempotente: o mesmo endToEndId não entra duas vezes (retry de pagamento).
+        $pagamentos = is_array($stored['pix'] ?? null) ? $stored['pix'] : [];
+        foreach ($pagamentos as $existente) {
+            if (($existente['endToEndId'] ?? null) === ($pagamento['endToEndId'] ?? '')) {
+                return true;
+            }
+        }
+
+        $pagamentos[] = $pagamento;
+        $stored['pix'] = $pagamentos;
+        $stored['status'] = 'CONCLUIDA';
+
+        Db::transaction(function () use ($stored, $locationId, $ref) {
+            self::writeEntity('brcode_dynamic_by_location', $locationId, $stored);
+            if (!empty($ref['transactionId'])) {
+                self::writeEntity('brcode_dynamic', (string) $ref['transactionId'], $stored);
+            }
+        });
+
+        /*
+         * Quem criou o QR é o RECEBEDOR: no real ele é avisado por um webhook
+         * pix-payment-in. Shape conferido em mocks-v2 — o caso DYNAMIC_QRCODE é
+         * o único que carrega `transactionIdBRCode` (o transactionId numérico da
+         * cobrança) e `clientRequestId`; em STATIC_QRCODE/DICT essas chaves nem
+         * existem, e aí não há ponteiro nenhum para a cobrança.
+         */
+        $id = (string) ($pagamento['endToEndId'] ?? gerarHashMock());
+        $webhookBody = [
+            'id' => $id,
+            'amount' => (float) ($pagamento['valor'] ?? 0),
+            'clientRequestId' => $stored['clientRequestId'] ?? null,
+            'transactionIdentification' => $transactionIdentification,
+            'endToEndId' => $pagamento['endToEndId'] ?? '',
+            'initiationType' => 'DYNAMIC_QRCODE',
+            'paymentType' => 'IMMEDIATE',
+            'urgency' => 'HIGH',
+            'transactionType' => 'RECEIVEPIX',
+            'debitParty' => $pagamento['debitParty'] ?? new \stdClass(),
+            'creditParty' => $pagamento['creditParty'] ?? new \stdClass(),
+            'remittanceInformation' => $pagamento['infoPagador'] ?? null,
+            'currentBalance' => 9784.19,
+            'oldBalance' => 9754.23,
+            'transactionIdBRCode' => (string) ($ref['transactionId'] ?? ''),
+        ];
+
+        self::scheduleWebhook(
+            'pix-payment-in',
+            self::webhookEnvelope('pix-payment-in', 'CONFIRMED', $webhookBody),
+            2,
+            self::webhookSubscriptionUrl('pix-payment-in')
+        );
+
+        return true;
     }
 
     private static function extractFromEmv(string $emv): ?string

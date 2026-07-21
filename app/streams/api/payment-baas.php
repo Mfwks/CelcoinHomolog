@@ -10,9 +10,37 @@ header('Content-Type: application/json');
 $body = Cslabs::requestBody();
 $body = is_array($body) ? $body : $_GET;
 
+/*
+ * Liquidação da cobrança quando o pagamento veio de QR dinâmico: o txid é o elo
+ * com a cobrança (o consumidor o lê da location e devolve aqui). Sem isto a
+ * `location` do QR ficaria ATIVA para sempre e o ciclo não fecharia.
+ * É idempotente (dedupe por endToEndId), por isso roda também no replay —
+ * caso contrário um retry logo após a criação deixaria a cobrança sem liquidar.
+ */
+$liquidarQr = static function (array $req, array $resp): void {
+    $txid = (string) ($req['transactionIdentification'] ?? '');
+    $tipo = strtoupper((string) ($req['initiationType'] ?? ''));
+
+    if ($txid === '' || !in_array($tipo, ['DYNAMIC_QRCODE', 'STATIC_QRCODE'], true)) {
+        return;
+    }
+
+    Cslabs::settleDynamicBrcode($txid, [
+        'endToEndId' => (string) ($resp['endToEndId'] ?? $resp['body']['endToEndId'] ?? ''),
+        'txid' => $txid,
+        'valor' => number_format((float) ($resp['amount'] ?? $resp['body']['amount'] ?? 0), 2, '.', ''),
+        'horario' => gmdate('Y-m-d\TH:i:s.v\Z'),
+        'infoPagador' => (string) ($req['remittanceInformation'] ?? ''),
+        // Do ponto de vista do recebedor as partes se invertem.
+        'debitParty' => $req['debitParty'] ?? new stdClass(),
+        'creditParty' => $req['creditParty'] ?? new stdClass(),
+    ]);
+};
+
 // Idempotência: mesmo clientCode reenviado (retry) replica a transação original.
 $replay = Cslabs::pixPaymentReplay((string) ($body['clientCode'] ?? ''));
 if ($replay !== null) {
+    $liquidarQr($body, $replay);
     echo json_encode($replay, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     return;
 }
@@ -75,6 +103,8 @@ if (($response['status'] ?? null) === 'SUCCESS') {
             Cslabs::writeEntity('pix_payments', $endToEndId, $state);
         }
     });
+
+    $liquidarQr($body, $response);
 
     $webhookUrl = Cslabs::webhookSubscriptionUrl('pix-payment-out');
     $webhookPayload = Cslabs::webhookEnvelope('pix-payment-out', 'CONFIRMED', [

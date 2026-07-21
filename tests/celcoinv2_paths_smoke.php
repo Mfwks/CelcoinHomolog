@@ -151,7 +151,78 @@ ok(!isset($e1['body']), 'emv v1: sem envelope');
 ok(($e2['status'] ?? null) === 200, 'emv/full: status é INT 200 (real)');
 ok(isset($e2['body']['amount']['original']), 'emv/full: body.amount.original');
 ok(array_key_exists('additionaldata', $e2['body']['merchantAccountInformation'] ?? []), 'emv/full: quirk additionaldata (d minúsculo)');
-ok(isset($e2['body']['payload']['calendar']), 'emv/full: body.payload.calendar');
+ok(($e2['body']['type'] ?? '') === 'STATIC', 'emv/full: type STATIC quando o EMV não é dinâmico');
+// No real (mocks-v2, 14 amostras STATIC) `payload` vem NULL no QR estático —
+// só o dinâmico traz a cobrança. url/gui idem.
+ok(array_key_exists('payload', $e2['body']) && $e2['body']['payload'] === null, 'emv/full: payload null em QR estático (real)');
+ok(array_key_exists('url', $e2['body']['merchantAccountInformation']) && $e2['body']['merchantAccountInformation']['url'] === null, 'emv/full: url null em QR estático (real)');
+
+# ── Ciclo do QR dinâmico: criar → ler (decode) → pagar → location CONCLUIDA ──
+// O banco do tmp_smoke sobrevive entre rodadas e o pagamento é idempotente por
+// clientCode — sem sufixo único, a 2ª execução cairia no replay e não liquidaria.
+$run = substr(hash('sha256', (string) getmypid() . microtime(true)), 0, 8);
+[, $qr] = call('POST', '/pix/v1/brcode/dynamic', [
+    'key' => 'cab8f3ed-18ae-4cb1-a5a1-1d525a4e86fd',
+    'amount' => '73.42',
+    'expiration' => 3600,
+    'clientRequestId' => 'ciclo-e2e-' . $run,
+    'merchant' => ['city' => 'Sao Pedro', 'name' => 'Loja Teste'],
+]);
+$emvDin = $qr['body']['body']['dynamicBRCodeData']['emvqrcps'] ?? '';
+$locDin = $qr['body']['body']['location'] ?? '';
+$txidDin = $qr['body']['transactionIdentification'] ?? '';
+ok($emvDin !== '' && $locDin !== '', 'ciclo QR: criação devolveu emv + location');
+
+// 1) Ler o QR tem que devolver o que foi cobrado — não um valor sintético.
+[, $dec] = call('POST', '/pix/v1/emv', ['emv' => $emvDin]);
+ok((string) ($dec['type'] ?? '') === '2', 'ciclo QR: decode reconhece dinâmico (type 2)');
+ok((float) ($dec['transactionAmount'] ?? 0) === 73.42, 'ciclo QR: decode devolve o valor REAL da cobrança');
+ok(($dec['merchantAccountInformation']['key'] ?? '') === 'cab8f3ed-18ae-4cb1-a5a1-1d525a4e86fd', 'ciclo QR: decode resolve a chave da cobrança (não está no EMV)');
+ok(($dec['transactionIdentification'] ?? '') === $txidDin, 'ciclo QR: decode devolve o txid da cobrança');
+
+// 2) A location responde ATIVA antes do pagamento.
+$locEnc = rawurlencode($locDin);
+[, $antes] = call('GET', '/pix/v1/collection/immediate/payload/' . $locEnc);
+ok(($antes['status'] ?? '') === 'ATIVA', 'ciclo QR: location ATIVA antes de pagar');
+ok(($antes['valor']['original'] ?? '') === '73.42', 'ciclo QR: location devolve o valor cobrado');
+
+// 3) Pagar como STATIC_QRCODE tem que ser REJEITADO: o txid dinâmico tem 35
+//    chars e a Celcoin real limita a 25 nesse initiationType (CBE136).
+[, $errStatic] = call('POST', '/baas/v2/pix/payment', [
+    'amount' => 73.42, 'clientCode' => 'ciclo-static-' . $run,
+    'initiationType' => 'STATIC_QRCODE', 'transactionIdentification' => $txidDin,
+    'debitParty' => ['account' => '300547189179'],
+]);
+ok(($errStatic['error']['errorCode'] ?? '') === 'CBE136', 'ciclo QR: CBE136 quando txid > 25 chars em STATIC_QRCODE (regra real)');
+
+// 4) Pagar como DYNAMIC_QRCODE liquida a cobrança.
+[, $pago] = call('POST', '/baas/v2/pix/payment', [
+    'amount' => 73.42, 'clientCode' => 'ciclo-pago-' . $run,
+    'initiationType' => 'DYNAMIC_QRCODE', 'transactionIdentification' => $txidDin,
+    'debitParty' => ['account' => '300547189179'],
+    'creditParty' => ['key' => 'cab8f3ed-18ae-4cb1-a5a1-1d525a4e86fd'],
+    'remittanceInformation' => 'pagamento do ciclo',
+]);
+ok(isset($pago['body']['endToEndId']), 'ciclo QR: pagamento aceito');
+
+// 5) Agora a location vira CONCLUIDA e mostra o pagamento recebido.
+[, $depois] = call('GET', '/pix/v1/collection/immediate/payload/' . $locEnc);
+ok(($depois['status'] ?? '') === 'CONCLUIDA', 'ciclo QR: location CONCLUIDA depois de pago');
+ok(($depois['pix'][0]['valor'] ?? '') === '73.42', 'ciclo QR: bloco pix[] com o valor pago');
+ok(($depois['pix'][0]['endToEndId'] ?? '') === ($pago['body']['endToEndId'] ?? 'x'), 'ciclo QR: endToEndId do pagamento no bloco pix[]');
+
+// 6) Reenvio do mesmo pagamento não duplica o pix[] (idempotência).
+call('POST', '/baas/v2/pix/payment', [
+    'amount' => 73.42, 'clientCode' => 'ciclo-pago-' . $run,
+    'initiationType' => 'DYNAMIC_QRCODE', 'transactionIdentification' => $txidDin,
+    'debitParty' => ['account' => '300547189179'],
+]);
+[, $rep] = call('GET', '/pix/v1/collection/immediate/payload/' . $locEnc);
+ok(count($rep['pix'] ?? []) === 1, 'ciclo QR: retry de pagamento não duplica pix[]');
+
+// 7) O link do QR (a própria location) é servido pelo mock.
+[, $viaLink] = call('GET', '/pixqrcode/v2/' . basename($locDin));
+ok(($viaLink['status'] ?? '') === 'CONCLUIDA' && ($viaLink['txid'] ?? '') === $txidDin, 'ciclo QR: a URL impressa no QR resolve pelo mock');
 
 # ── Pix payment: body nos DOIS (a v1 lê body.id), status PROCESSING só no V2 ──
 $pix = [
