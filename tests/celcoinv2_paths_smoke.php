@@ -318,6 +318,28 @@ ok(isset($pagoCruzado['body']['endToEndId']), 'escopo cruzado: pagamento aceito'
 [, $depoisCruzado] = $semAuth('GET', '/pixqrcode/v2/' . $locNovo);
 ok(($depoisCruzado['status'] ?? '') === 'CONCLUIDA', 'escopo cruzado: cobrança liquida mesmo criada por outra identidade');
 
+/*
+ * 7h) "QR Code inválido no app" — o decode é feito pelo PAGADOR, que por
+ * definição não é quem emitiu o QR. Escopado por cliente, o app caía no
+ * sintético e recebia chave e valor ALEATÓRIOS: o QR válido virava inválido,
+ * sem erro em lugar nenhum. Estes asserts fixam que decode e resolução da
+ * location enxergam a cobrança de outra identidade.
+ */
+[, $qrOutro] = $semAuth('GET', '/pixqrcode/novo?valor=57,25');
+$opts2 = ['http' => ['method' => 'GET', 'header' => "Accept: application/json\r\n", 'ignore_errors' => true, 'timeout' => 10]];
+$qrOutro = json_decode((string) @file_get_contents('http://' . $host . '/pixqrcode/novo?valor=57,25&chave=teste@pix.com', false, stream_context_create($opts2)), true);
+$emvOutro = $qrOutro['body']['body']['dynamicBRCodeData']['emvqrcps'] ?? '';
+$locOutro = $qrOutro['body']['body']['location'] ?? '';
+
+// call() manda bearer — é o app decodificando QR criado sem token.
+[, $decOutro] = call('POST', '/pix/v1/emv', ['emv' => $emvOutro]);
+ok((float) ($decOutro['transactionAmount'] ?? 0) === 57.25, 'decode entre identidades: valor REAL da cobrança (era aleatório)');
+ok(($decOutro['merchantAccountInformation']['key'] ?? '') === 'teste@pix.com', 'decode entre identidades: chave REAL da cobrança (era aleatória)');
+
+[, $locOutroResp] = call('GET', '/pix/v1/collection/immediate/payload/' . rawurlencode($locOutro));
+ok(($locOutroResp['valor']['original'] ?? '') === '57.25', 'location entre identidades: valor REAL');
+ok(($locOutroResp['chave'] ?? '') === 'teste@pix.com', 'location entre identidades: chave REAL');
+
 [, $viaLink] = call('GET', '/pixqrcode/v2/' . basename($locDin));
 ok(($viaLink['status'] ?? '') === 'CONCLUIDA' && ($viaLink['txid'] ?? '') === $txidDin, 'ciclo QR: a URL impressa no QR resolve pelo mock');
 

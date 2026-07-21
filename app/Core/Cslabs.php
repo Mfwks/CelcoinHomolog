@@ -1562,7 +1562,7 @@ class Cslabs
     /** Imagem do QR dinâmico em base64, localizada pelo id da `location`. */
     public static function locationBase64Response(string $locationId): array
     {
-        $emv = self::brcodeEmvForLocation($locationId);
+        $emv = self::brcodeEmvForLocation($locationId, true);
 
         if ($emv === null) {
             return [
@@ -1650,7 +1650,14 @@ class Cslabs
                  * lado dela; aqui resolvemos pelo mesmo índice que a criação
                  * gravou, para o pagador ler EXATAMENTE o que foi cobrado.
                  */
-                $cob = self::cobPayloadForLocation(basename(rtrim($url, '/')));
+                /*
+                 * `true` = busca a cobrança em qualquer cliente. Não é atalho:
+                 * quem decodifica um QR é o PAGADOR, que por definição NÃO é
+                 * quem emitiu. Escopado por cliente, o app caía no sintético e
+                 * recebia chave e valor aleatórios — o QR "válido" virava
+                 * inválido no app, sem erro em lugar nenhum.
+                 */
+                $cob = self::cobPayloadForLocation(basename(rtrim($url, '/')), '', true);
                 $key = (string) ($cob['chave'] ?? $key);
                 $amount = (float) ($cob['valor']['original'] ?? 0);
                 $txid = (string) ($cob['txid'] ?? $txid);
@@ -1698,9 +1705,11 @@ class Cslabs
          * do QR dinâmico gravou. Sem isso o payload servido pela `location` não
          * teria relação nenhuma com o QR que o pagador leu.
          */
+        // Mesmo motivo do decode: quem resolve a location é o pagador.
         return self::cobPayloadForLocation(
             basename(rtrim(parse_url($payloadUrl, PHP_URL_PATH) ?: $payloadUrl, '/')),
-            $payloadUrl
+            $payloadUrl,
+            true
         );
     }
 
