@@ -62,6 +62,7 @@ $web->add('/pixqrcode/v2/{locationId}','api/pix-location');
 // mock (abrir no navegador, apontar a câmera, ver a cobrança virar CONCLUIDA).
 $web->add('/pixqrcode/v2/{locationId}/imagem','api/pix-location-image');
 $web->add('/pixqrcode/v2/{locationId}/ver','api/pix-location-page');
+$web->add('/pixqrcode/v2/{locationId}/pagar','api/pix-location-pagar');
 
 # Charge cancel
 $web->add('/baas/v2/charge','api/charge-fetch'); // GET com TransactionId/ExternalId em query

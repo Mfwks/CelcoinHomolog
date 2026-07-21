@@ -12,7 +12,7 @@ use App\Core\Cslabs;
 use App\Core\QrCode;
 
 $locationId = (string) ($web->args->locationId ?? '');
-$emv = Cslabs::brcodeEmvForLocation($locationId);
+$emv = Cslabs::brcodeEmvForLocation($locationId, true); // sem escopo: aberto pelo navegador
 
 header('Content-Type: text/html; charset=utf-8');
 
@@ -26,7 +26,7 @@ if ($emv === null) {
     return;
 }
 
-$cob = Cslabs::cobPayloadForLocation($locationId);
+$cob = Cslabs::cobPayloadForLocation($locationId, '', true);
 $pago = ($cob['status'] ?? '') === 'CONCLUIDA';
 $svg = QrCode::svg(QrCode::encode($emv), 6, 4);
 $pix = $cob['pix'][0] ?? null;
@@ -70,6 +70,11 @@ $pix = $cob['pix'][0] ?? null;
   <?php endif; ?>
 </dl>
 
+<?php if (!$pago): ?>
+  <button id="pagar" style="font:inherit;padding:.6rem 1.2rem;border:0;border-radius:8px;
+    background:#2563eb;color:#fff;font-weight:600;cursor:pointer">Simular pagamento</button>
+<?php endif; ?>
+
 <label style="width:min(560px,90vw)">Pix copia e cola
   <textarea readonly onclick="this.select()"><?= $h($emv) ?></textarea>
 </label>
@@ -82,7 +87,20 @@ $pix = $cob['pix'][0] ?? null;
 <?php if (!$pago): ?>
   <script>
     // Recarrega enquanto está ATIVA, para o status virar CONCLUIDA sozinho
-    // assim que o pagamento entrar.
-    setTimeout(() => location.reload(), 5000);
+    // assim que o pagamento entrar (pelo app ou pelo botão).
+    const recarregar = setTimeout(() => location.reload(), 5000);
+
+    document.getElementById('pagar').addEventListener('click', async (e) => {
+      clearTimeout(recarregar);
+      e.target.disabled = true;
+      e.target.textContent = 'Liquidando…';
+      const r = await fetch('pagar', { method: 'POST' });
+      if (!r.ok) {
+        e.target.textContent = 'Falhou — ver console';
+        console.error(await r.text());
+        return;
+      }
+      location.reload();
+    });
   </script>
 <?php endif; ?>

@@ -245,6 +245,49 @@ ok(str_contains($rawSemQr, 'CBE014'), 'imagem QR: location desconhecida devolve 
 ok(str_contains($html, '<svg'), 'página do QR: traz o QR embutido em SVG');
 ok(str_contains($html, '73,42'), 'página do QR: mostra o valor da cobrança');
 
+/*
+ * 7d) As telas do mock são abertas pelo NAVEGADOR, que não manda bearer — e o
+ * QR foi criado pelo app, com token. Como as entidades são escopadas por
+ * cliente, sem tratamento isso dava 404 e a ferramenta visual não servia pra
+ * nada. Estes asserts existem para essa regressão não voltar.
+ */
+$semAuth = static function (string $method, string $uri) use ($host): array {
+    $opts = ['http' => ['method' => $method, 'ignore_errors' => true, 'timeout' => 10]];
+    $raw = @file_get_contents('http://' . $host . $uri, false, stream_context_create($opts));
+    $raw = $raw === false ? '' : $raw;
+    return [$raw, json_decode($raw, true)];
+};
+
+// QR novo, criado COM token, consultado SEM token.
+[, $qr2] = call('POST', '/pix/v1/brcode/dynamic', [
+    'key' => 'cab8f3ed-18ae-4cb1-a5a1-1d525a4e86fd',
+    'amount' => '41.00',
+    'clientRequestId' => 'sem-auth-' . $run,
+]);
+$loc2 = basename($qr2['body']['body']['location'] ?? '');
+
+[$htmlSem] = $semAuth('GET', '/pixqrcode/v2/' . $loc2 . '/ver');
+ok(str_contains($htmlSem, '<svg'), 'navegador sem bearer: página do QR abre (era 404)');
+[$pngSem] = $semAuth('GET', '/pixqrcode/v2/' . $loc2 . '/imagem');
+ok(str_starts_with($pngSem, "\x89PNG"), 'navegador sem bearer: imagem do QR abre (era 404)');
+[, $jsonSem] = $semAuth('GET', '/pixqrcode/v2/' . $loc2);
+ok(($jsonSem['status'] ?? '') === 'ATIVA', 'navegador sem bearer: link do QR resolve');
+
+# 7e) Botão "Simular pagamento": liquida no escopo do DONO, não no do navegador
+[, $pagou] = $semAuth('POST', '/pixqrcode/v2/' . $loc2 . '/pagar');
+ok(($pagou['status'] ?? '') === 'SUCCESS', 'botão pagar: liquida a cobrança');
+
+[, $depoisSem] = $semAuth('GET', '/pixqrcode/v2/' . $loc2);
+ok(($depoisSem['status'] ?? '') === 'CONCLUIDA', 'botão pagar: navegador vê CONCLUIDA');
+
+// O que importa de verdade: o APP, com o bearer dele, tem que ver a baixa.
+[, $appVe] = call('GET', '/pix/v1/collection/immediate/payload/' . rawurlencode($qr2['body']['body']['location']));
+ok(($appVe['status'] ?? '') === 'CONCLUIDA', 'botão pagar: o APP também vê CONCLUIDA (baixa no escopo certo)');
+ok(($appVe['pix'][0]['valor'] ?? '') === '41.00', 'botão pagar: bloco pix[] visível para o app');
+
+[, $semQr] = $semAuth('POST', '/pixqrcode/v2/location-inexistente/pagar');
+ok(($semQr['error']['errorCode'] ?? '') === 'CBE014', 'botão pagar: location desconhecida devolve erro');
+
 [, $viaLink] = call('GET', '/pixqrcode/v2/' . basename($locDin));
 ok(($viaLink['status'] ?? '') === 'CONCLUIDA' && ($viaLink['txid'] ?? '') === $txidDin, 'ciclo QR: a URL impressa no QR resolve pelo mock');
 

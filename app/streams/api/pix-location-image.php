@@ -12,7 +12,7 @@ use App\Core\Cslabs;
 use App\Core\QrCode;
 
 $locationId = (string) ($web->args->locationId ?? '');
-$emv = Cslabs::brcodeEmvForLocation($locationId);
+$emv = Cslabs::brcodeEmvForLocation($locationId, true); // sem escopo: aberto pelo navegador
 
 if ($emv === null) {
     http_response_code(404);

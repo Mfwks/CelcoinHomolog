@@ -231,6 +231,52 @@ class Cslabs
         return sprintf('sqlite://entities/%s/%s/%s', $clientId, $safeType, $safeId);
     }
 
+    /**
+     * Lê uma entidade IGNORANDO o escopo de cliente.
+     *
+     * Existe só para as telas do próprio mock (`pixqrcode/v2/…`): o QR é criado
+     * pelo app, com bearer, e fica no client_id dele; o navegador não manda
+     * bearer nenhum e cairia em outro escopo, levando 404 na hora de ver o QR.
+     *
+     * NÃO usar em stream que imita endpoint da Celcoin — lá o isolamento por
+     * cliente é o comportamento correto e some com a separação entre tenants.
+     */
+    public static function readEntityAnyClient(string $type, string $entityId): array|false
+    {
+        $stmt = Db::pdo()->prepare(
+            'SELECT data FROM entities WHERE type = :t AND id = :i ORDER BY updated_at DESC LIMIT 1'
+        );
+        $stmt->execute([
+            ':t' => self::safeName($type),
+            ':i' => self::safeName($entityId),
+        ]);
+        $row = $stmt->fetchColumn();
+
+        if ($row === false) {
+            return false;
+        }
+
+        $decoded = json_decode((string) $row, true);
+
+        return is_array($decoded) ? $decoded : false;
+    }
+
+    /**
+     * client_id dono de uma entidade. Complementa readEntityAnyClient: as telas
+     * do mock precisam ESCREVER no escopo de quem criou a cobrança (o app), e
+     * não no do navegador, senão a baixa fica invisível para o app.
+     */
+    public static function entityOwnerClient(string $type, string $entityId): ?string
+    {
+        $stmt = Db::pdo()->prepare(
+            'SELECT client_id FROM entities WHERE type = :t AND id = :i ORDER BY updated_at DESC LIMIT 1'
+        );
+        $stmt->execute([':t' => self::safeName($type), ':i' => self::safeName($entityId)]);
+        $row = $stmt->fetchColumn();
+
+        return $row === false ? null : (string) $row;
+    }
+
     public static function readEntity(string $type, string $entityId, ?string $clientId = null): array|false
     {
         $clientId ??= self::context()['client_id'];
@@ -1364,12 +1410,15 @@ class Cslabs
     /**
      * Host (sem esquema, como manda o BR Code) da `location` do QR dinâmico.
      *
-     * O real usa `qrcode.pix.celcoin.com.br`. Aqui apontamos para o PRÓPRIO
-     * mock de propósito: o `locationId` é gerado localmente, então a Celcoin não
-     * tem cobrança com esse id e a URL real só devolveria erro — enquanto esta
-     * resolve de verdade (rota `pixqrcode/v2/{locationId}`). É a única
-     * divergência deliberada do EMV em relação ao real; para voltar à grafia da
-     * Celcoin, é só trocar o retorno desta função.
+     * O real usa `qrcode.pix.celcoin.com.br`; aqui apontamos para o PRÓPRIO
+     * mock. É a ÚNICA divergência deliberada do EMV em relação ao real, e a
+     * decisão é de produto: queremos controle total sobre a URL e um QR que
+     * abre no navegador para teste visual. O `locationId` é gerado localmente,
+     * então a URL da Celcoin não teria cobrança por trás de qualquer forma.
+     *
+     * Não afeta o app: ele nunca busca esta URL — repassa como parâmetro para
+     * `pix/v1/collection/…/payload/…`, que resolve pelo último segmento.
+     * Para voltar à grafia da Celcoin, basta trocar o retorno desta função.
      */
     private static function brcodeLocationHost(): string
     {
@@ -1530,9 +1579,11 @@ class Cslabs
     }
 
     /** EMV do QR dinâmico gravado na criação, ou null se a location é desconhecida. */
-    public static function brcodeEmvForLocation(string $locationId): ?string
+    public static function brcodeEmvForLocation(string $locationId, bool $qualquerCliente = false): ?string
     {
-        $stored = self::readEntity('brcode_dynamic_by_location', trim($locationId));
+        $stored = $qualquerCliente
+            ? self::readEntityAnyClient('brcode_dynamic_by_location', trim($locationId))
+            : self::readEntity('brcode_dynamic_by_location', trim($locationId));
         $emv = $stored['body']['dynamicBRCodeData']['emvqrcps'] ?? null;
 
         return is_string($emv) && $emv !== '' ? $emv : null;
@@ -1669,7 +1720,7 @@ class Cslabs
      * Para uma location desconhecida cai no sintético determinístico de antes,
      * para não quebrar quem só quer um payload qualquer.
      */
-    public static function cobPayloadForLocation(string $locationId, string $seedSource = ''): array
+    public static function cobPayloadForLocation(string $locationId, string $seedSource = '', bool $qualquerCliente = false): array
     {
         $locationId = trim($locationId);
         $seed = hash('sha256', $seedSource !== '' ? $seedSource : $locationId);
@@ -1682,7 +1733,12 @@ class Cslabs
         $status = 'ATIVA';
         $pagamentos = [];
 
-        $stored = $locationId !== '' ? self::readEntity('brcode_dynamic_by_location', $locationId) : false;
+        $stored = false;
+        if ($locationId !== '') {
+            $stored = $qualquerCliente
+                ? self::readEntityAnyClient('brcode_dynamic_by_location', $locationId)
+                : self::readEntity('brcode_dynamic_by_location', $locationId);
+        }
 
         if (is_array($stored)) {
             $inner = $stored['body'] ?? [];
@@ -1737,7 +1793,7 @@ class Cslabs
      * CelcoinPix::enviarPix). Devolve false quando o txid não é de um QR
      * criado aqui (pagamento de QR de terceiro), sem efeito colateral.
      */
-    public static function settleDynamicBrcode(string $transactionIdentification, array $pagamento): bool
+    public static function settleDynamicBrcode(string $transactionIdentification, array $pagamento, ?string $clientId = null): bool
     {
         $transactionIdentification = trim($transactionIdentification);
 
@@ -1745,14 +1801,14 @@ class Cslabs
             return false;
         }
 
-        $ref = self::readEntity('brcode_dynamic_by_txid', $transactionIdentification);
+        $ref = self::readEntity('brcode_dynamic_by_txid', $transactionIdentification, $clientId);
 
         if (!is_array($ref) || empty($ref['locationId'])) {
             return false;
         }
 
         $locationId = (string) $ref['locationId'];
-        $stored = self::readEntity('brcode_dynamic_by_location', $locationId);
+        $stored = self::readEntity('brcode_dynamic_by_location', $locationId, $clientId);
 
         if (!is_array($stored)) {
             return false;
@@ -1770,10 +1826,10 @@ class Cslabs
         $stored['pix'] = $pagamentos;
         $stored['status'] = 'CONCLUIDA';
 
-        Db::transaction(function () use ($stored, $locationId, $ref) {
-            self::writeEntity('brcode_dynamic_by_location', $locationId, $stored);
+        Db::transaction(function () use ($stored, $locationId, $ref, $clientId) {
+            self::writeEntity('brcode_dynamic_by_location', $locationId, $stored, $clientId);
             if (!empty($ref['transactionId'])) {
-                self::writeEntity('brcode_dynamic', (string) $ref['transactionId'], $stored);
+                self::writeEntity('brcode_dynamic', (string) $ref['transactionId'], $stored, $clientId);
             }
         });
 

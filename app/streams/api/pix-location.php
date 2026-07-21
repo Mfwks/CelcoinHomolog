@@ -17,7 +17,9 @@ header('Content-Type: application/json');
 
 $locationId = (string) ($web->args->locationId ?? '');
 
-$response = Cslabs::cobPayloadForLocation($locationId);
+// `true` = ignora o escopo de cliente: quem abre este link é o navegador, sem
+// bearer, enquanto o QR foi criado pelo app com token. Ver readEntityAnyClient.
+$response = Cslabs::cobPayloadForLocation($locationId, '', true);
 
 if (($response['status'] ?? null) === 'ERROR') {
     http_response_code(404);
