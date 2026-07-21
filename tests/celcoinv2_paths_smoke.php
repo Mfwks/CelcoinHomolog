@@ -288,6 +288,36 @@ ok(($appVe['pix'][0]['valor'] ?? '') === '41.00', 'botão pagar: bloco pix[] vis
 [, $semQr] = $semAuth('POST', '/pixqrcode/v2/location-inexistente/pagar');
 ok(($semQr['error']['errorCode'] ?? '') === 'CBE014', 'botão pagar: location desconhecida devolve erro');
 
+# 7f) Gerador de QR de exemplo (/pixqrcode/novo) — sem montar request na mão
+[, $novo] = $semAuth('GET', '/pixqrcode/novo?valor=30,00');
+// Sem Accept: json o stream redireciona; file_get_contents segue o 302 e cai
+// na página, então aqui pedimos JSON explicitamente.
+$opts = ['http' => ['method' => 'GET', 'header' => "Accept: application/json\r\n", 'ignore_errors' => true, 'timeout' => 10]];
+$novoJson = json_decode((string) @file_get_contents('http://' . $host . '/pixqrcode/novo?valor=30,00', false, stream_context_create($opts)), true);
+ok((float) ($novoJson['body']['body']['amount']['original'] ?? 0) === 30.0, 'gerador: respeita ?valor com vírgula');
+$locNovo = basename($novoJson['body']['body']['location'] ?? '');
+$txNovo = $novoJson['body']['transactionIdentification'] ?? '';
+ok($locNovo !== '', 'gerador: devolve uma location utilizável');
+
+[, $verNovo] = $semAuth('GET', '/pixqrcode/v2/' . $locNovo);
+ok(($verNovo['status'] ?? '') === 'ATIVA', 'gerador: cobrança fica consultável');
+
+/*
+ * 7g) O caso que quebrava calado: QR gerado por UMA identidade (o painel, sem
+ * token) e pago por OUTRA (o app, com bearer). O pagamento era aceito e a
+ * cobrança ficava ATIVA para sempre, porque o txid não estava no escopo de
+ * quem pagou. Agora a liquidação procura o dono e escreve no escopo dele.
+ */
+[, $pagoCruzado] = call('POST', '/baas/v2/pix/payment', [
+    'amount' => 30.00, 'clientCode' => 'cruzado-' . $run,
+    'initiationType' => 'DYNAMIC_QRCODE', 'transactionIdentification' => $txNovo,
+    'debitParty' => ['account' => '300547189179'],
+]);
+ok(isset($pagoCruzado['body']['endToEndId']), 'escopo cruzado: pagamento aceito');
+
+[, $depoisCruzado] = $semAuth('GET', '/pixqrcode/v2/' . $locNovo);
+ok(($depoisCruzado['status'] ?? '') === 'CONCLUIDA', 'escopo cruzado: cobrança liquida mesmo criada por outra identidade');
+
 [, $viaLink] = call('GET', '/pixqrcode/v2/' . basename($locDin));
 ok(($viaLink['status'] ?? '') === 'CONCLUIDA' && ($viaLink['txid'] ?? '') === $txidDin, 'ciclo QR: a URL impressa no QR resolve pelo mock');
 

@@ -57,6 +57,8 @@ $web->add('/pix/v1/location/{locationId}/base64','api/location-base64');
 // A própria URL impressa no QR dinâmico (campo `location`, tag 26/25 do EMV).
 // No Pix real quem resolve é o PSP recebedor; aqui é o mock, senão o link do QR
 // não devolve nada e a simulação para no meio.
+// Literal antes da rota com {locationId}: senão "novo" seria lido como um id.
+$web->add('/pixqrcode/novo','api/pix-location-novo');
 $web->add('/pixqrcode/v2/{locationId}','api/pix-location');
 // Imagem e página do QR — não existem na Celcoin, são ferramenta de teste do
 // mock (abrir no navegador, apontar a câmera, ver a cobrança virar CONCLUIDA).

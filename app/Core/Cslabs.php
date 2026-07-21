@@ -1803,6 +1803,21 @@ class Cslabs
 
         $ref = self::readEntity('brcode_dynamic_by_txid', $transactionIdentification, $clientId);
 
+        /*
+         * Conveniência de mock: se o txid não está no escopo de quem pagou,
+         * procura em qualquer cliente e liquida no escopo do DONO.
+         *
+         * Sem isso, gerar o QR de um jeito (curl, painel, sem token) e pagar de
+         * outro (o app, com bearer) resultava em pagamento aceito e cobrança
+         * eternamente ATIVA — falha silenciosa, o pior tipo. Num ambiente único
+         * de teste isso é atrito puro; o txid é praticamente único, então o
+         * risco de casar com a cobrança de outro tenant é desprezível.
+         */
+        if (!is_array($ref) && $clientId === null) {
+            $ref = self::readEntityAnyClient('brcode_dynamic_by_txid', $transactionIdentification);
+            $clientId = self::entityOwnerClient('brcode_dynamic_by_txid', $transactionIdentification);
+        }
+
         if (!is_array($ref) || empty($ref['locationId'])) {
             return false;
         }
