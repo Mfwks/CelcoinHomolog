@@ -109,10 +109,34 @@ expect(
     'arquivo comum resolve cenario success -> webhook APPROVED'
 );
 
-# 6) Validacoes que ja existiam seguem de pe (nao foram atropeladas pela cota).
-$r = Cslabs::kycFileUploadResponse(['documentnumber' => $doc, 'filetype' => 'RG'], ['front' => $arquivo()]);
-expect(($r['error']['errorCode'] ?? '') === 'CBE014', 'sem onboardingId -> CBE014');
+# 6) onboardingId e OPCIONAL — quem identifica o titular aqui e o documento.
+#    Nenhum dos seis call sites do banco digital manda esse campo, e a Celcoin real
+#    aceita assim (em producao chegou a devolver o 400 de COTA para a mesma requisicao,
+#    ou seja, contou o envio). Enquanto o mock exigia o campo, TODO envio do app morria
+#    em CBE014 antes do contador — e o mock nao servia para o caso que existe para
+#    reproduzir. Ver sustenance/dev/2026/07-28-bateria-qa-kyc-sms/.
+$semOnboarding = ['documentnumber' => '55544433322', 'filetype' => 'RG'];
 
+$r1 = Cslabs::kycFileUploadResponse($semOnboarding, ['front' => $arquivo()]);
+expect(($r1['status'] ?? '') === 'SUCCESS', 'sem onboardingId -> SUCCESS (nao e obrigatorio)');
+expect(!empty($r1['body']['onboardingId']), 'sem onboardingId -> mock deriva um a partir do documento');
+
+# O id derivado tem de ser ESTAVEL: senao o webhook PENDING e o de veredito chegariam
+# com ids diferentes e o consumidor nao conseguiria parear.
+$r2 = Cslabs::kycFileUploadResponse($semOnboarding, ['front' => $arquivo()]);
+expect(
+    $r1['body']['onboardingId'] === $r2['body']['onboardingId'],
+    'id derivado do documento e estavel entre envios'
+);
+
+# Documento diferente -> id diferente.
+$r3 = Cslabs::kycFileUploadResponse(
+    ['documentnumber' => '66655544433', 'filetype' => 'RG'],
+    ['front' => $arquivo()]
+);
+expect($r3['body']['onboardingId'] !== $r1['body']['onboardingId'], 'outro documento -> outro id derivado');
+
+# 7) Validacoes que ja existiam seguem de pe (nao foram atropeladas pela cota).
 $r = Cslabs::kycFileUploadResponse($form('99988877766', 'CARTEIRINHA'), ['front' => $arquivo()]);
 expect(($r['error']['errorCode'] ?? '') === 'CBE014', 'filetype invalido -> CBE014');
 

@@ -4299,6 +4299,28 @@ class Cslabs
         ];
     }
 
+    /**
+     * UUID v4-shaped estavel para um documento sem onboarding registrado.
+     *
+     * Deterministico de proposito: o mesmo documento precisa produzir sempre o mesmo
+     * onboardingId, senao o webhook PENDING e o de veredito chegariam com ids
+     * diferentes e o consumidor nao conseguiria parear.
+     */
+    private static function onboardingIdDeterministico(string $documento): string
+    {
+        $hash = hash('sha256', 'kyc-onboarding:' . $documento);
+
+        return sprintf(
+            '%s-%s-4%s-%s%s-%s',
+            substr($hash, 0, 8),
+            substr($hash, 8, 4),
+            substr($hash, 13, 3),
+            dechex((hexdec(substr($hash, 16, 1)) & 0x3) | 0x8),
+            substr($hash, 17, 3),
+            substr($hash, 20, 12)
+        );
+    }
+
     public static function kycFileUploadResponse(array $form, array $files): array
     {
         // KYC v1: campos em lowercase sem separador, conforme doc oficial.
@@ -4310,13 +4332,6 @@ class Cslabs
 
         $allowedTypes = ['CNH', 'RG', 'PASSPORT', 'RNE'];
 
-        if ($onboardingId === '') {
-            return [
-                'status' => 'ERROR',
-                'version' => '1.0.0',
-                'error' => ['errorCode' => 'CBE014', 'message' => 'onboardingId é obrigatório (multipart text).'],
-            ];
-        }
         if ($documentNumber === '') {
             return [
                 'status' => 'ERROR',
@@ -4340,6 +4355,29 @@ class Cslabs
         }
 
         $documentoLimpo = preg_replace('/\D+/', '', $documentNumber) ?: $documentNumber;
+
+        // onboardingId e OPCIONAL: quem identifica o titular aqui e o documento.
+        //
+        // Ate 28/07/2026 este builder exigia o campo e devolvia CBE014 sem ele. Errado:
+        // nenhum dos seis call sites do banco digital envia onboardingId no multipart
+        // (o postData tem cpf, documentnumber, filetype, front e verse), e a Celcoin
+        // REAL aceita assim — em producao ela chegou a devolver o 400 de cota para essa
+        // mesma requisicao, ou seja, contou o envio. Exigindo o campo, todo envio do app
+        // morria em CBE014 antes do contador, e o mock ficava inutil justamente para
+        // reproduzir o caso que ele existe para reproduzir. Achado pela bateria de QA em
+        // sustenance/dev/2026/07-28-bateria-qa-kyc-sms/.
+        if ($onboardingId === '') {
+            $vinculo = self::readEntity('onboardings_by_document', $documentoLimpo);
+            $onboardingId = is_array($vinculo) ? trim((string) ($vinculo['onboardingId'] ?? '')) : '';
+        }
+
+        if ($onboardingId === '') {
+            // Documento sem onboarding conhecido neste mock. Id ESTAVEL derivado do
+            // documento, para que os dois webhooks (PENDING e veredito) cheguem com o
+            // mesmo identificador e o consumidor consiga parear.
+            $onboardingId = self::onboardingIdDeterministico($documentoLimpo);
+        }
+
         $chaveCota = $documentoLimpo . ':' . $filetype;
         $cota = self::readEntity('kyc_upload_quota', $chaveCota);
         $jaEnviados = (int) (is_array($cota) ? ($cota['count'] ?? 0) : 0);

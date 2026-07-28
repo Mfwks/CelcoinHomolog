@@ -103,6 +103,22 @@ não pegaria isso.
 O `REJECTED` **não carrega motivo** — sem `rejectedReason`, sem `errorCode` —
 porque é assim que a Celcoin real responde.
 
+### `onboardingId` é opcional
+
+O consumidor **não precisa** mandar `onboardingId` no multipart — quem identifica o
+titular aqui é o `documentnumber`. Nenhum dos seis call sites do banco digital envia
+esse campo, e a Celcoin real aceita assim.
+
+Quando o campo vem, vale. Quando não vem, o mock resolve nesta ordem:
+
+1. o onboarding já registrado para aquele documento (`onboardings_by_document`);
+2. na falta dele, um id **estável** derivado do documento — para que o `PENDING` e o
+   webhook de veredito cheguem com o mesmo identificador.
+
+> Até 28/07/2026 o mock exigia o campo e devolvia `CBE014`. Errado: todo envio do app
+> morria antes do contador de cota, e o mock não servia para reproduzir justamente o
+> caso que existe para reproduzir.
+
 ### Cota de envio por documento
 
 O mock recusa a partir do 4º envio do mesmo `filetype` para o mesmo
