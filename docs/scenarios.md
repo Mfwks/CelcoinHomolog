@@ -69,7 +69,60 @@ contendo palavra-chave dispara o cenário.
 
 Exemplo: `erro@pix.com`, `fraude@pix.com`, `+5511999990404`.
 
-## 3. Internals
+## 3. Convenção do nome do arquivo (KYC fileupload)
+
+`POST /celcoinkyc/document/v1/fileupload` não tem `amount` nem chave Pix — o
+cenário vem do **nome do arquivo enviado** em `front`, pela mesma tabela de
+palavras-chave da §2.
+
+| nome do arquivo                | webhook de veredito |
+|--------------------------------|---------------------|
+| `rg-verso-rejeitado.jpg`       | `REJECTED`          |
+| `doc-fraude.png`               | `REJECTED`          |
+| `rg-verso.jpg` (qualquer outro)| `APPROVED`          |
+
+Escolher pelo nome do arquivo, e não por um campo extra no multipart, é
+deliberado: **o app real não mandaria um campo de cenário**, então qualquer
+convenção que dependesse disso testaria um caminho que produção não percorre.
+
+### Sequência de webhooks
+
+Um upload aceito dispara **dois** webhooks `kyc`, não um:
+
+```
++1s   {"entity":"kyc","status":"PENDING",  …}   ← aceite de recebimento
++5s   {"entity":"kyc","status":"APPROVED"|"REJECTED", …}
+```
+
+O `PENDING` existe porque a Celcoin real o envia, e porque foi ele que expôs um
+defeito no consumidor: o `recebimentoKyc` do banco digital reenviava os
+documentos ao receber `PENDING`, dobrando cada envio e queimando a cota do
+provedor. Um mock que só emitisse o veredito final testaria o caminho feliz e
+não pegaria isso.
+
+O `REJECTED` **não carrega motivo** — sem `rejectedReason`, sem `errorCode` —
+porque é assim que a Celcoin real responde.
+
+### Cota de envio por documento
+
+O mock recusa a partir do 4º envio do mesmo `filetype` para o mesmo
+`documentnumber` (`Cslabs::KYC_LIMITE_ENVIOS_POR_DOCUMENTO`), devolvendo
+**HTTP 400 com shape plano**, diferente do envelope de erro do resto da API:
+
+```json
+{"errorCode":400,"errorMessage":"Você atingiu o limite máximo de envios para RG, por favor entre em contato com suporte"}
+```
+
+Esse shape é literal de produção. Consumidor que procure `error.errorCode` não
+encontra nada — foi exatamente o que aconteceu no caso real.
+
+> O limite real da Celcoin **não nos foi informado**; 3 é um número escolhido
+> para a bateria ser curta, não uma afirmação sobre o comportamento dela.
+
+Cota é contada por `(documentnumber, filetype)`: trocar de RG para CNH libera
+uma cota nova. Envio recusado por validação (`CBE014`) não consome cota.
+
+## 4. Internals
 
 - Catálogo de centavos → cenário: `Cslabs::SCENARIO_BY_CENTS`
 - Resolução: `Cslabs::scenarioFromAmount(mixed $amount, string $default = 'success')`

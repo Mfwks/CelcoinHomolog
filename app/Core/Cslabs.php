@@ -4268,6 +4268,37 @@ class Cslabs
         ];
     }
 
+    /**
+     * Quantos envios do MESMO tipo de documento o mesmo documentNumber pode fazer.
+     *
+     * A Celcoin real bloqueia depois de algumas tentativas, mas NUNCA nos informou o
+     * numero — o que sabemos e o efeito, medido em producao (bcbr, 28/07/2026, conta
+     * 3098): a partir de certo ponto o upload passa a devolver HTTP 400 dizendo que
+     * o limite de envios para RG foi atingido, e a conta trava sem poder corrigir o
+     * documento. Aqui sao 3 para a bateria de teste ser curta; nao e a afirmacao de
+     * que o limite dela seja 3.
+     */
+    public const KYC_LIMITE_ENVIOS_POR_DOCUMENTO = 3;
+
+    /**
+     * Erro de cota de envio de documento, no shape PLANO que a Celcoin devolveu em
+     * producao — diferente do envelope {status, version, error} do resto da API:
+     *
+     *   {"errorCode":400,"errorMessage":"Você atingiu o limite máximo de envios
+     *    para RG, por favor entre em contato com suporte"}
+     *
+     * Copiado do log do bcbr de 28/07/2026 13:58:57. O stream reconhece o shape pelo
+     * errorCode no topo e devolve HTTP 400 sem envelopar.
+     */
+    public static function kycQuotaExcedidaResponse(string $filetype): array
+    {
+        return [
+            'errorCode' => 400,
+            'errorMessage' => 'Você atingiu o limite máximo de envios para ' . $filetype
+                . ', por favor entre em contato com suporte',
+        ];
+    }
+
     public static function kycFileUploadResponse(array $form, array $files): array
     {
         // KYC v1: campos em lowercase sem separador, conforme doc oficial.
@@ -4308,11 +4339,20 @@ class Cslabs
             ];
         }
 
+        $documentoLimpo = preg_replace('/\D+/', '', $documentNumber) ?: $documentNumber;
+        $chaveCota = $documentoLimpo . ':' . $filetype;
+        $cota = self::readEntity('kyc_upload_quota', $chaveCota);
+        $jaEnviados = (int) (is_array($cota) ? ($cota['count'] ?? 0) : 0);
+
+        if ($jaEnviados >= self::KYC_LIMITE_ENVIOS_POR_DOCUMENTO) {
+            return self::kycQuotaExcedidaResponse($filetype);
+        }
+
         $fileId = gerarHashMock();
         $record = [
             'fileId' => $fileId,
             'onboardingId' => $onboardingId,
-            'documentNumber' => preg_replace('/\D+/', '', $documentNumber) ?: $documentNumber,
+            'documentNumber' => $documentoLimpo,
             'cnpj' => preg_replace('/\D+/', '', $cnpj) ?: $cnpj,
             'filetype' => $filetype,
             'originalFileName' => (string) ($front['name'] ?? 'upload.bin'),
@@ -4322,9 +4362,16 @@ class Cslabs
             'createDate' => gmdate('Y-m-d\TH:i:s\Z'),
         ];
 
-        Db::transaction(function () use ($fileId, $onboardingId, $record) {
+        Db::transaction(function () use ($fileId, $onboardingId, $record, $chaveCota, $jaEnviados) {
             self::writeEntity('kyc_uploads', $fileId, $record);
             self::writeEntity('kyc_uploads_by_onboarding', $onboardingId, ['fileId' => $fileId]);
+            self::writeEntity('kyc_upload_quota', $chaveCota, [
+                'entity' => $chaveCota,
+                'count' => $jaEnviados + 1,
+                'limit' => self::KYC_LIMITE_ENVIOS_POR_DOCUMENTO,
+                'lastFileId' => $fileId,
+                'updatedAt' => gmdate('Y-m-d\TH:i:s\Z'),
+            ]);
         });
 
         return [
