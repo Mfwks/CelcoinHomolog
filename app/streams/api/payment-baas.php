@@ -1,5 +1,19 @@
 <?php
 
+/*
+ * Pix out. Serve os TRÊS paths da mesma operação:
+ *   POST /pix/v1/payment                                   (CelcoinPix::pagamentoPix — fluxo padrão)
+ *   POST /baas-wallet-transactions-webservice/v1/pix/payment
+ *   POST /baas/v2/pix/payment
+ *
+ * O v1 tinha stream próprio (api/payment) até 31/07 e por isso ficava de fora de
+ * tudo que foi ganhando aqui: não persistia em `pix_payments` (consultar o status
+ * do que foi pago pelo fluxo padrão devolvia CBE106 "transação não encontrada") e
+ * não tinha idempotência por clientCode (o mesmo retry que aqui replicava a
+ * transação, lá gerava um SEGUNDO pagamento). Medido em 31/07 replicando por curl
+ * a sequência do app. Um path só evita que a próxima correção nasça torta de novo.
+ */
+
 include_once __DIR__ . '/api-stream.php';
 
 use App\Core\Cslabs;

@@ -368,6 +368,39 @@ ok(array_key_exists('vlcpAmount', $p2['body'] ?? []), 'pix v2: body.vlcpAmount (
 ok(($replay['body']['id'] ?? '') === ($p2['body']['id'] ?? 'x'), 'pix v2: replay repete o mesmo body.id');
 ok(($replay['status'] ?? '') === 'PROCESSING', 'pix v2: replay mantém status PROCESSING');
 
+/*
+ * ── /pix/v1/payment: o path do fluxo PADRÃO (CelcoinPix::pagamentoPix:742) ──
+ *
+ * Até 31/07 este path tinha stream próprio e ficou de fora de tudo que o
+ * payment-baas foi ganhando. Descoberto replicando por curl a sequência do app:
+ * pagar por aqui não persistia (status devolvia CBE106) e o retry do mesmo
+ * clientCode gerava um SEGUNDO pagamento. Os três paths são a mesma operação.
+ */
+$ccV1 = 'v1-flow-' . $run;
+[, $v1p] = call('POST', '/pix/v1/payment', [
+    'amount' => 42.00,
+    'clientCode' => $ccV1,
+    'initiationType' => 'DICT',
+    'debitParty' => ['account' => '300547189179'],
+    'creditParty' => ['key' => 'destino@pix.com', 'name' => 'Credor'],
+]);
+ok(($v1p['status'] ?? '') === 'SUCCESS', 'pix /pix/v1/payment: SUCCESS no topo (sem envelope — não é path V2)');
+ok(isset($v1p['transactionId']) && isset($v1p['endToEndId']), 'pix /pix/v1/payment: transactionId/endToEndId no topo (enviarPix:1267,1284)');
+ok(isset($v1p['body']['id']), 'pix /pix/v1/payment: body.id — mesmo shape dos outros dois paths');
+
+[, $v1r] = call('POST', '/pix/v1/payment', [
+    'amount' => 42.00,
+    'clientCode' => $ccV1,
+    'initiationType' => 'DICT',
+    'debitParty' => ['account' => '300547189179'],
+    'creditParty' => ['key' => 'destino@pix.com', 'name' => 'Credor'],
+]);
+ok(($v1r['transactionId'] ?? '') === ($v1p['transactionId'] ?? 'x'), 'pix /pix/v1/payment: retry do mesmo clientCode NÃO gera segundo pagamento');
+
+[, $v1s] = call('GET', '/baas/v2/pix/payment/status?clientCode=' . rawurlencode($ccV1));
+ok(in_array($v1s['status'] ?? '', ['PROCESSING', 'CONFIRMED'], true), 'pix /pix/v1/payment: consultável por status (devolvia CBE106)');
+ok(($v1s['body']['id'] ?? '') === ($v1p['transactionId'] ?? 'x'), 'pix /pix/v1/payment: status devolve a transação certa');
+
 # ── BR Code estático: plano nos dois (real não usa envelope) ──
 [, $bs] = call('POST', '/pix/v1/brcode/static', ['key' => 'abc-key', 'amount' => '10.00']);
 ok(isset($bs['emvqrcps']), 'brcode static: emvqrcps no topo (v1 lê fixo — era null antes)');

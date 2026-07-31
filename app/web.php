@@ -81,7 +81,11 @@ $web->add('/baas/v2/billpayment','api/billpayment'); // efetuaPagamento :: /baas
 $web->add('/baas/v2/billpayment/status','api/billpayment-status'); // confirmarPagamento :: /baas/v2/billpayment/status
 $web->add('/api-integration-baas-webservice/v1/charge','api/charge'); // emissaoBoletoCobranca :: /api-integration-baas-webservice/v1/charge
 $web->add('/pix/v1/dict/v2/key','api/key-old'); // consultarChaveAntigo :: /pix/v1/dict/v2/key
-$web->add('/pix/v1/payment','api/payment'); // enviarPix :: /pix/v1/payment
+// Mesmo stream dos outros dois: é a MESMA operação de Pix out, e este é o path
+// que o fluxo padrão usa (CelcoinPix::pagamentoPix). Enquanto tinha stream
+// próprio, só ele ficava sem persistir/idempotenciar — ver comentário em
+// api/payment-baas.php.
+$web->add('/pix/v1/payment','api/payment-baas'); // enviarPix :: /pix/v1/payment
 $web->add('/baas-wallet-transactions-webservice/v1/pix/payment','api/payment-baas'); // enviarPix :: baas-wallet-transactions-webservice/v1/pix/payment
 $web->add('/baas/v2/pix/payment','api/payment-baas'); // alias v2 canônico (developers.celcoin.com.br/reference/realizar-transferência-pix)
 $web->add('/baas-wallet-transactions-webservice/v1/wallet/internal/transfer','api/internal-transfer');
