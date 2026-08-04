@@ -445,6 +445,10 @@ class Cslabs
         }
 
         $map = [
+            // Primeiro do mapa de propósito: o match abaixo é por substring, e este é
+            // o único slug composto — deixá-lo no fim abriria a chance de um needle
+            // curto de outro cenário mordê-lo antes.
+            'accept_then_timeout' => ['accept_then_timeout', 'accept-then-timeout', 'aceita-e-pendura'],
             'fraud' => ['fraude', 'fraud', 'suspeita', 'restrito', 'restricted'],
             'error' => ['erro', 'error', '500', 'outroerro'],
             'failed' => ['falha', 'fail', 'failed', 'rejeitado', 'rejected'],
@@ -476,7 +480,7 @@ class Cslabs
                 $scenario = self::scenarioFromAmount($value, '');
 
                 if ($scenario !== '') {
-                    return $scenario;
+                    return self::rememberScenario($scenario);
                 }
 
                 continue;
@@ -485,11 +489,31 @@ class Cslabs
             $scenario = self::scenarioFromValue($value, '');
 
             if ($scenario !== '') {
-                return $scenario;
+                return self::rememberScenario($scenario);
             }
         }
 
-        return $default;
+        return self::rememberScenario($default);
+    }
+
+    /*
+     * Cenário resolvido nesta request. O builder resolve internamente e devolve só a
+     * resposta; o stream precisa do slug para decidir o que fazer DEPOIS de aceitar —
+     * é o caso do `accept_then_timeout` no spb-transfer. Recomputar no stream exigiria
+     * repetir a lista de campos, e é a duplicata que sai de sincronia.
+     */
+    private static string $lastScenario = 'success';
+
+    public static function lastScenario(): string
+    {
+        return self::$lastScenario;
+    }
+
+    private static function rememberScenario(string $scenario): string
+    {
+        self::$lastScenario = $scenario;
+
+        return $scenario;
     }
 
     /*
@@ -532,7 +556,83 @@ class Cslabs
         15 => 'error',
         16 => 'not_found',
         17 => 'failed',
+        18 => 'accept_then_timeout',
     ];
+
+    /*
+     * ── accept_then_timeout: aceitar e SÓ ENTÃO pendurar ──────────────────────────
+     *
+     * Pedido pela sustentação no briefing 2026-08-04 para destravar o QA do LGR-011
+     * (TED V2, estorno cego no timeout). O defeito só aparece quando as duas coisas
+     * acontecem juntas: a Celcoin ACEITOU a TED e mesmo assim o POST do app estourou.
+     * O app estorna o débito local por uma TED que saiu de verdade — e quando o
+     * `spb-transfer-out CONFIRMED` chega depois, o `TedService::processTedOut:230` vê a
+     * transferência já ESTORNADA e a descarta com um `Yii::info`, mascarando a
+     * divergência.
+     *
+     * Nenhum cenário existente reproduz isso. O `timeout` (0,06) responde HTTP 504 na
+     * hora: é recusa limpa, cai no LGR-002, e nada foi aceito.
+     *
+     * A ORDEM é o cenário. Persistir + agendar o webhook ANTES de dormir — dormir
+     * primeiro faria o CONFIRMED não representar "aceito" e o teste perderia o sentido.
+     *
+     * 35s porque o Guzzle do app corta em 30 (`CelcoinV2HttpClient.php:22`).
+     */
+    public const SCENARIO_ACCEPT_THEN_TIMEOUT = 'accept_then_timeout';
+
+    public const ACCEPT_THEN_TIMEOUT_SECONDS = 35;
+
+    /*
+     * Cenários em que o mock ACEITA normalmente: o desvio está no transporte, não na
+     * regra de negócio. Precisam passar pelo caminho de sucesso do builder — caindo no
+     * ramo de erro não haveria o que persistir nem o que confirmar depois.
+     */
+    public static function scenarioIsAccept(string $scenario): bool
+    {
+        return $scenario === '' || $scenario === 'success' || $scenario === self::SCENARIO_ACCEPT_THEN_TIMEOUT;
+    }
+
+    /*
+     * Sobrescrevível por env só para o smoke: um teste que esperasse 35s de verdade
+     * ninguém rodaria. Teto de 120s para que a variável não vire um jeito de pendurar
+     * um worker indefinidamente.
+     */
+    public static function acceptThenTimeoutSeconds(): int
+    {
+        $override = getenv('CSLABS_HANG_SECONDS');
+
+        if (is_numeric($override) && (int) $override >= 0 && (int) $override <= 120) {
+            return (int) $override;
+        }
+
+        return self::ACCEPT_THEN_TIMEOUT_SECONDS;
+    }
+
+    /*
+     * Pendura a request DEPOIS de ela já ter sido aceita e persistida.
+     *
+     * `set_time_limit(0)`: sleep não conta para o max_execution_time em Linux, mas o
+     * teto continua valendo para o resto do script — zerar evita que a resposta morra
+     * por um limite baixo de php.ini.
+     *
+     * `ignore_user_abort(true)`: aos 30s o cliente fecha a conexão. Sem isso o PHP
+     * abortaria o script na primeira escrita e o `ob_start` do api-stream não rodaria —
+     * a interação não seria persistida e o shot do painel não mostraria o que houve.
+     * O shot é justamente a evidência que o QA vai ler depois.
+     */
+    public static function hangAfterAccept(): int
+    {
+        $seconds = self::acceptThenTimeoutSeconds();
+
+        @set_time_limit(0);
+        ignore_user_abort(true);
+
+        if ($seconds > 0) {
+            sleep($seconds);
+        }
+
+        return $seconds;
+    }
 
     /*
      * Último cenário disparado por paymentError/billPaymentError/chargeError nesta request.
@@ -583,6 +683,9 @@ class Cslabs
             'error'              => 500,
             'not_found'          => 404,
             'failed'             => 400,
+            // Só o spb/transfer implementa o modo; nos demais streams o slug cai no
+            // ramo de erro e 501 diz exatamente isso, em vez de um 400 mudo.
+            'accept_then_timeout' => 501,
         ][$scenario] ?? 400;
     }
 
@@ -1930,7 +2033,7 @@ class Cslabs
         }
 
         $duplicate = self::readEntity('spb_transfers_by_client_code', $clientCode);
-        if (is_array($duplicate) && !empty($duplicate['id']) && ($scenario === 'success' || $scenario === '')) {
+        if (is_array($duplicate) && !empty($duplicate['id']) && self::scenarioIsAccept($scenario)) {
             return [
                 'version' => '1.0.0',
                 'status' => 'ERROR',
@@ -1938,7 +2041,9 @@ class Cslabs
             ];
         }
 
-        if ($scenario !== 'success' && $scenario !== '') {
+        // `accept_then_timeout` NÃO é erro: daqui em diante ele segue idêntico ao
+        // sucesso. Quem pendura é o stream, depois de persistir e agendar o webhook.
+        if (!self::scenarioIsAccept($scenario)) {
             $err = self::paymentError($scenario);
             return ['version' => '1.0.0', 'status' => 'ERROR', 'error' => $err['error']];
         }
@@ -3089,6 +3194,10 @@ class Cslabs
             'bank_unavailable' => ['CBE503', 'Instituição financeira destinatária temporariamente indisponível.'],
             'duplicate' => ['CBE100', 'Existe um lançamento idêntico pendente. Aguarde para evitar duplicidade.'],
             'rate_limit' => ['CBE429', 'Limite de requisições excedido. Tente novamente em instantes.'],
+            // Um amount 0,18 aqui é uso indevido: o modo existe só no POST spb/transfer.
+            // Sem esta entrada cairia no fallback `error` e devolveria CBE500 — erro
+            // plausível, causa invisível.
+            'accept_then_timeout' => ['CSLAB501', 'Cenário accept_then_timeout (amount 0,18) só é implementado no POST spb/transfer.'],
         ];
 
         [$code, $message] = $errors[$scenario] ?? $errors['error'];

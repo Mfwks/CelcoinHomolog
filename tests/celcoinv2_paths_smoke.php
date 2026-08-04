@@ -15,114 +15,24 @@
  * Ver HOMOLOGACAO_CELCOIN_V2.md §0 e §1.1.
  */
 
-$host = '127.0.0.1:8391';
-$root = dirname(__DIR__);
+require __DIR__ . '/http_harness.php';
 
-// Se a porta já estiver ocupada, o php -S morre e o teste rodaria contra o serviço
-// alheio — falhando de um jeito confuso. Melhor abortar dizendo o que houve.
-$busy = @fsockopen('127.0.0.1', 8391, $errno, $errstr, 0.3);
-if ($busy) {
-    fclose($busy);
-    fwrite(STDERR, "porta 8391 já está em uso — feche o processo e rode de novo\n");
-    exit(1);
-}
+$host = smoke_serve(8391);
+$token = null;
 
-// auto_prepend_file isola o TMP: sem ele o smoke gravaria no SQLite real do mock.
-$server = proc_open(
-    'php -d auto_prepend_file=' . escapeshellarg(__DIR__ . '/tmp_isolate.php')
-        . ' -S ' . $host . ' index.php',
-    [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
-    $pipes,
-    $root
-);
-
-if (!is_resource($server)) {
-    fwrite(STDERR, "não foi possível subir o servidor embutido\n");
-    exit(1);
-}
-
-register_shutdown_function(function () use ($server) {
-    $status = proc_get_status($server);
-    if ($status['running'] ?? false) {
-        // O php -S roda como filho do sh; matar o grupo evita deixar a porta presa.
-        @exec('pkill -P ' . $status['pid'] . ' 2>/dev/null');
-        proc_terminate($server);
-    }
-    proc_close($server);
-});
-
-// Espera a porta subir (em vez de sleep fixo).
-$up = false;
-for ($i = 0; $i < 50; $i++) {
-    $conn = @fsockopen('127.0.0.1', 8391, $errno, $errstr, 0.2);
-    if ($conn) {
-        fclose($conn);
-        $up = true;
-        break;
-    }
-    usleep(100000);
-}
-if (!$up) {
-    fwrite(STDERR, "servidor embutido não respondeu em 5s\n");
-    exit(1);
-}
-
-$fails = 0;
 function ok(bool $c, string $m): void
 {
-    global $fails;
-    echo ($c ? "ok: " : "FAIL: ") . "$m\n";
-    if (!$c) {
-        $fails++;
-    }
+    smoke_ok($c, $m);
 }
-
-$token = null;
 
 function call(string $method, string $uri, ?array $body = null): array
 {
     global $host, $token;
 
-    $headers = '';
-    // Sem bearer, Cslabs::boot() deriva o client_id de um fingerprint do request —
-    // que varia entre um POST com corpo e um GET. As entidades são escopadas por
-    // cliente, então POST e consulta cairiam em namespaces diferentes e a consulta
-    // daria 404. O consumidor real sempre manda token; o teste faz o mesmo.
-    if ($token !== null) {
-        $headers .= "Authorization: Bearer {$token}\r\n";
-    }
-
-    $opts = ['http' => [
-        'method' => $method,
-        'ignore_errors' => true,
-        'timeout' => 10,
-    ]];
-    if ($body !== null) {
-        $headers .= "Content-Type: application/json\r\n";
-        $opts['http']['content'] = json_encode($body);
-    }
-    if ($headers !== '') {
-        $opts['http']['header'] = $headers;
-    }
-
-    $raw = @file_get_contents('http://' . $host . $uri, false, stream_context_create($opts));
-    $raw = $raw === false ? '' : $raw;
-    return [$raw, json_decode($raw, true)];
+    return smoke_http($host, $method, $uri, $body, $token);
 }
 
-$tokenOpts = ['http' => [
-    'method' => 'POST',
-    'header' => "Content-Type: application/x-www-form-urlencoded\r\n",
-    'content' => http_build_query([
-        'client_id' => 'paths-smoke',
-        'client_secret' => 'paths-smoke-secret',
-        'grant_type' => 'client_credentials',
-    ]),
-    'ignore_errors' => true,
-    'timeout' => 10,
-]];
-$tokenRaw = @file_get_contents('http://' . $host . '/v5/token', false, stream_context_create($tokenOpts));
-$token = json_decode((string) $tokenRaw, true)['access_token'] ?? null;
+$token = smoke_token($host, 'paths-smoke');
 ok($token !== null, 'auth: token emitido (fixa o client_id entre os casos)');
 
 # ── DICT consultar: mesmo stream (api/key), shapes diferentes ──
@@ -431,8 +341,4 @@ ok(($t3['body']['endToEndId'] ?? '') === ($t2['body']['endToEndId'] ?? 'x'), 'in
 ok(str_starts_with($raw, '%PDF'), 'charge/pdf: devolve PDF binário cru (real: application/pdf)');
 ok(!str_contains($raw, 'cslabs_info'), 'charge/pdf: binário passa intacto pelo ob_start');
 
-if ($fails > 0) {
-    echo "\ncelcoinv2 paths smoke: $fails FALHA(S)\n";
-    exit(1);
-}
-echo "\ncelcoinv2 paths smoke: OK\n";
+smoke_finish('celcoinv2 paths smoke');

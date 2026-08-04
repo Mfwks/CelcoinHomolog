@@ -78,6 +78,23 @@ Db::transaction(function () use ($id, $clientCode, $response) {
     Cslabs::writeEntity('spb_transfers_by_client_code', $clientCode, ['id' => $id]);
 });
 
+/*
+ * accept_then_timeout (amount 0,18 — LGR-011): aceitar primeiro, pendurar depois.
+ * Ver o bloco do cenário em Cslabs. Aqui só importa a ORDEM, e ela é a do arquivo:
+ * o Db::transaction acima já persistiu, o scheduleWebhook abaixo já agendou, e só
+ * então vem o sleep. Inverter qualquer um dos dois esvazia o teste.
+ */
+$penduraDepoisDeAceitar = Cslabs::lastScenario() === Cslabs::SCENARIO_ACCEPT_THEN_TIMEOUT;
+
+/*
+ * O webhook tem que chegar DEPOIS do timeout do app, não antes. Se o CONFIRMED
+ * chegasse aos 3s o `processTedOut` acharia a transferência ainda PENDENTE e a
+ * conciliaria normalmente — o app só estorna aos 30s, e o que o QA precisa observar
+ * é o par na ordem inversa: estorno cego primeiro, CONFIRMED engolido depois
+ * (TedService::processTedOut:230). Daí a folga sobre o tempo em que penduramos.
+ */
+$webhookDelay = $penduraDepoisDeAceitar ? Cslabs::acceptThenTimeoutSeconds() + 5 : 3;
+
 $webhookUrl = Cslabs::webhookSubscriptionUrl('spb-transfer-out');
 Cslabs::scheduleWebhook(
     'spb-transfer-out',
@@ -86,9 +103,13 @@ Cslabs::scheduleWebhook(
         'clientFinality' => (string) ($body['clientFinality'] ?? '10'),
         'numCtrlStr' => 'STR' . date('Ymd') . str_pad((string) random_int(100000000, 999999999), 9, '0', STR_PAD_LEFT),
     ])),
-    3,
+    $webhookDelay,
     $webhookUrl
 );
+
+if ($penduraDepoisDeAceitar) {
+    Cslabs::hangAfterAccept();
+}
 
 http_response_code(201);
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

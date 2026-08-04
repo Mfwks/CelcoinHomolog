@@ -28,6 +28,7 @@ correspondente. Valores ≥ R$ 1,00 seguem o fluxo normal de sucesso.
 | 0,15    | `error`               | CBE500    | 500  | Erro interno ao processar a transação.                                 |
 | 0,16    | `not_found`           | CBE404    | 404  | Transação ou recurso não encontrado.                                   |
 | 0,17    | `failed`              | CBE400    | 400  | Transação rejeitada pela instituição recebedora.                       |
+| 0,18    | `accept_then_timeout` | —         | 201  | **Aceita e pendura** — só no `spb/transfer`. Ver §4.                    |
 
 Mensagens e errorCodes variam um pouco entre **paymentError** (PIX),
 **billPaymentError** (pagamento de boleto) e **chargeError** (emissão de
@@ -45,13 +46,21 @@ O HTTP status (coluna acima) é o mesmo nos três.
 Magic amount é resolvido automaticamente por `Cslabs::scenarioFromPayload`
 em todos os streams que já consultam o payload por cenário:
 
-- `POST /pix/payment` (`payment-baas`) — PIX out
-- `POST /baas-walletbusiness/v1/spb/transfer` (`spb-transfer`) — TED
-- `POST /pix-payment/refund` e `/baas-walletbusiness/v1/pix/refund` (`pix-reverse-*`) — estorno PIX
-- `POST /baas-billpayment/v1/authorize` (`billpayment-authorize`) — consulta boleto
-- `POST /baas-billpayment/v1/billpayment` (`billpayment`) — pagamento boleto
-- `POST /charge/v1/charge` (`charge`) — emissão boleto/cobrança
-- `POST /baas-walletbusiness/v1/transfer/internal` (`internal-transfer`) — TEF
+> Os paths abaixo foram reconferidos contra `app/web.php` em **04/08/2026**: os oito
+> que esta lista trazia antes **não existiam em rota nenhuma** (`/pix/payment`,
+> `/baas-walletbusiness/...`, `/charge/v1/charge`, …). Quem seguisse a doc mandava
+> requisição para 404 e concluía que o cenário não funcionava.
+
+- `POST /pix/v1/payment`, `/baas-wallet-transactions-webservice/v1/pix/payment` e
+  `/baas/v2/pix/payment` (`payment-baas`) — PIX out
+- `POST /baas-wallet-transactions-webservice/v1/spb/transfer` (`spb-transfer`) — TED
+- `POST /baas-wallet-transactions-webservice/v1/pix/reverse` e `/baas/v2/pix/reverse`
+  (`pix-reverse-baas`) — estorno PIX
+- `POST /v5/transactions/billpayments/authorize` (`billpayment-authorize`) — consulta boleto
+- `POST /baas/v2/billpayment` (`billpayment`) — pagamento boleto
+- `POST /api-integration-baas-webservice/v1/charge` (`charge`) — emissão boleto/cobrança
+- `POST /baas-wallet-transactions-webservice/v1/wallet/internal/transfer` e
+  `/baas/v2/wallet/internal/transfer` (`internal-transfer`) — TEF
 
 ## 2. Convenção da chave PIX (endpoints sem `amount`)
 
@@ -138,7 +147,67 @@ encontra nada — foi exatamente o que aconteceu no caso real.
 Cota é contada por `(documentnumber, filetype)`: trocar de RG para CNH libera
 uma cota nova. Envio recusado por validação (`CBE014`) não consome cota.
 
-## 4. Internals
+## 4. `accept_then_timeout` — aceitar e só então pendurar (TED)
+
+`amount 0,18` no **`POST /baas-wallet-transactions-webservice/v1/spb/transfer`**. É o
+único cenário do catálogo que **não** é um erro: o mock aceita a TED normalmente e o
+desvio está no **transporte**.
+
+O que acontece, nesta ordem:
+
+1. persiste `spb_transfers` + alias por `clientCode` (dentro do `Db::transaction` de sempre);
+2. agenda o webhook `spb-transfer-out CONFIRMED`;
+3. **só então** `sleep(35s)` e responde `201 PROCESSING` — para uma conexão que a essa
+   altura já morreu.
+
+**Por que 35s:** o Guzzle do app corta em 30 (`CelcoinV2HttpClient.php:22`). O POST do
+app estoura **depois** de a Celcoin já ter aceitado.
+
+**Por que a ordem é o cenário.** Dormir antes de persistir faria o `CONFIRMED` não
+representar "aceito", e o teste perderia o sentido. É o que `tests/spb_accept_then_timeout_smoke.php`
+defende — e a asserção foi falsificada (invertendo o stream de propósito, ela falha;
+a de duração, sozinha, não pega a inversão).
+
+**O webhook chega em `35 + 5 = 40s`, não nos 3s de sempre.** Se o `CONFIRMED` chegasse
+antes do timeout do app, o `processTedOut` acharia a transferência ainda PENDENTE e a
+conciliaria normalmente. O par que o QA precisa observar é o inverso: **estorno cego
+primeiro** (o app estorna sem checar se a Celcoin aceitou), **`CONFIRMED` engolido
+depois** — `TedService::processTedOut:230` vê a transferência já `ESTORNADA` e a
+descarta com um `Yii::info`, mascarando a divergência. É o defeito **LGR-011**.
+
+### Por que magic-cents, e por que 0,18
+
+O gatilho tem que chegar no **corpo que o app envia**. Medido em `TedService:124-141`,
+o corpo tem exatamente: `amount`, `clientCode`, `debitParty`, `creditParty`,
+`clientFinality`, `description`. **Não há campo de mock** — um `mock_scenario` só
+funcionaria se o app o encaminhasse, e ele não conhece campos de mock.
+
+Sobram três canais reais, e os três funcionam (`scenarioFromPayload` lê `description`
+e `clientCode` além do `amount`): `description: "aceita-e-pendura"` e um `clientCode`
+contendo `accept_then_timeout` disparam o mesmo cenário. **Magic-cents é o recomendado**
+por ser o canal já comprovado.
+
+⚠️ **`0,07` não serve** — está ocupado por `bank_unavailable` desde antes. O briefing de
+04/08 sugeriu esse valor; o primeiro centavo livre era o **18**.
+
+### Fora do `spb/transfer` o slug é uso indevido, e diz isso
+
+Só o `spb-transfer` implementa o modo. `amount 0,18` em qualquer outro stream
+transacional devolve **HTTP 501 `CSLAB501`** nomeando o que houve. Sem essa entrada
+cairia no fallback `error` e responderia CBE500 — erro plausível de causa invisível.
+
+### Cuidados operacionais
+
+- **Sob `php -S` o servidor é single-threaded**: enquanto a request está pendurada, ele
+  não atende mais ninguém. Em produção o mock roda sob Apache (multiprocesso), onde o
+  hang prende **um worker**, não o serviço.
+- **Verificar no deploy** se algum timeout de servidor mata a request antes dos 35s
+  (`request_terminate_timeout` do FPM, `ProxyTimeout`). O efeito no app ainda seria uma
+  exceção por volta dos 30s, mas por conexão fechada e não por timeout de leitura.
+- `CSLABS_HANG_SECONDS` (0..120) encurta o hang — existe **para o smoke**, que não pode
+  esperar 35s. Não é para uso em ambiente compartilhado.
+
+## 5. Internals
 
 - Catálogo de centavos → cenário: `Cslabs::SCENARIO_BY_CENTS`
 - Resolução: `Cslabs::scenarioFromAmount(mixed $amount, string $default = 'success')`
