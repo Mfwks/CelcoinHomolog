@@ -6,6 +6,9 @@ class Cslabs
 {
     private static ?array $context = null;
 
+    /** Webhooks que esta request deixou de agendar — ver noteWebhookSkipped(). */
+    private static array $webhookSkips = [];
+
     public static function boot(array $meta = []): array
     {
         if (self::$context !== null) {
@@ -156,6 +159,16 @@ class Cslabs
                 'stream' => $context['meta']['stream'] ?? null,
             ],
         ];
+
+        /*
+         * Os que NÃO saíram entram no mesmo `webhooks[]` que o painel já renderiza,
+         * ao lado dos entregues. Vai aqui e não no appendWebhookToInteraction porque
+         * a linha da interação só nasce nesta função — durante a request ela ainda
+         * não existe, e o append cairia no `return` de "não achei a interação".
+         */
+        if (self::$webhookSkips !== []) {
+            $payload['webhooks'] = self::$webhookSkips;
+        }
 
         $pdo = Db::pdo();
         $stmt = $pdo->prepare(<<<'SQL'
@@ -2986,9 +2999,52 @@ class Cslabs
     {
         return self::deleteEntity('webhook_subscriptions', $entity);
     }
+
+    /**
+     * Registra o webhook que NÃO saiu — e por quê.
+     *
+     * O `scheduleWebhook` desiste quando não há URL de destino, e isso é correto:
+     * a Celcoin real também só entrega para entidade inscrita. O que estava errado
+     * era desistir **em silêncio**. Em 05/08/2026 a sustentação perdeu uma bateria
+     * do LGR-011 por causa disso: o `spb-transfer-out CONFIRMED` nunca foi agendado
+     * porque o client não tinha inscrição, e nada no painel, no shot ou na resposta
+     * dizia isso — descobriu-se lendo o código do mock.
+     *
+     * ⚠️ Só toca painel e `webhook_dispatches`. A resposta HTTP não muda: quem
+     * consome estes streams lê caminho fixo, e a Celcoin real não devolveria nada
+     * parecido. Diagnóstico de mock não é contrato de API.
+     */
+    private static function noteWebhookSkipped(string $event, ?string $url): void
+    {
+        $context = self::context();
+        $inscricao = self::webhookSubscription($event);
+
+        $motivo = is_array($inscricao)
+            ? sprintf("há inscrição para '%s', mas o webhookUrl não é uma URL válida (%s)", $event, var_export($url, true))
+            : sprintf("não há inscrição de webhook para '%s' neste client_id", $event);
+
+        $entry = [
+            'webhook_id'  => 'wh_skip_' . bin2hex(random_bytes(6)),
+            'request_id'  => $context['request_id'],
+            'client_id'   => $context['client_id'],
+            'event'       => $event,
+            'status'      => 'skipped',
+            'target_url'  => null,
+            'reason'      => $motivo,
+            'fix'         => sprintf(
+                'POST /baas/v2/webhook/subscription {"entity":"%s","webhookUrl":"https://<app>/…"} com o MESMO bearer que fez esta request — a inscrição é por client_id.',
+                $event
+            ),
+            'skipped_at'  => date(DATE_ATOM),
+        ];
+
+        self::$webhookSkips[] = $entry;
+        self::registerWebhook($entry);
+    }
     public static function scheduleWebhook(string $event, array $payload, int $delaySeconds = 2, ?string $url = null): bool
     {
         if (!$url || !filter_var($url, FILTER_VALIDATE_URL)) {
+            self::noteWebhookSkipped($event, $url);
             return false;
         }
 

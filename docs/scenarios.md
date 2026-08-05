@@ -201,11 +201,35 @@ cairia no fallback `error` e responderia CBE500 — erro plausível de causa inv
 - **Sob `php -S` o servidor é single-threaded**: enquanto a request está pendurada, ele
   não atende mais ninguém. Em produção o mock roda sob Apache (multiprocesso), onde o
   hang prende **um worker**, não o serviço.
-- **Verificar no deploy** se algum timeout de servidor mata a request antes dos 35s
-  (`request_terminate_timeout` do FPM, `ProxyTimeout`). O efeito no app ainda seria uma
-  exceção por volta dos 30s, mas por conexão fechada e não por timeout de leitura.
+- **Nenhum timeout de servidor corta a request** — verificado no deploy em 05/08/2026:
+  pela borda, o POST pendura **35,34s** e devolve 201 (a dúvida era `request_terminate_timeout`
+  do FPM / `ProxyTimeout`).
 - `CSLABS_HANG_SECONDS` (0..120) encurta o hang — existe **para o smoke**, que não pode
   esperar 35s. Não é para uso em ambiente compartilhado.
+
+### ⚠️ Pré-requisito: sem inscrição, o webhook não sai
+
+O `40s` acima **pressupõe uma inscrição ativa de `spb-transfer-out` para o client que
+fez o POST**. Sem ela, `webhookSubscriptionUrl()` devolve `null`, o `scheduleWebhook`
+desiste antes de agendar, e o cenário entrega só a **primeira metade** do LGR-011 (o
+estorno cego) — o `CONFIRMED` engolido nunca acontece.
+
+Foi o que travou a bateria de 05/08/2026: a homologacao2 não tinha essa inscrição.
+
+**A inscrição é por `client_id`**, e o `client_id` é derivado das credenciais usadas no
+`/v5/token` (`sha256(client_id|client_secret)`, 24 chars). Não dá para semear "para o
+app" de fora: quem registra tem que usar **o mesmo bearer** que faz as chamadas. Do lado
+do banco digital existe comando pronto para isso:
+
+```
+./yii celcoin/cadastrar-webhook spb-transfer-out 'https://<host>/index.php?r=celcoinv2/webhook/celcoin/handle'
+```
+
+**Como saber que foi isso.** Desde 05/08 o mock não desiste mais em silêncio: o webhook
+que não saiu vira linha em `webhook_dispatches` com `status = skipped` e aparece no
+`webhooks[]` do shot, com `reason` (a causa) e `fix` (a rota de inscrição). Nada disso
+entra na resposta HTTP — diagnóstico de mock não é contrato de API.
+Guardado por `tests/webhook_visibilidade_smoke.php`.
 
 ## 5. Internals
 
