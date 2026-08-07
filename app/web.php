@@ -69,6 +69,9 @@ $web->add('/pixqrcode/v2/{locationId}/pagar','api/pix-location-pagar');
 # Charge cancel
 $web->add('/baas/v2/charge','api/charge-fetch'); // GET com TransactionId/ExternalId em query
 $web->add('/baas/v2/charge/{txid}','api/charge-cancel');
+// Liquidação: não existe na Celcoin (lá o boleto é pago no banco do sacado e o
+// charge-in nasce de lá). É o gatilho de teste do mock, como o .../pagar do QR.
+$web->add('/baas/v2/charge/{txid}/pagar','api/charge-pagar');
 
 # AccountManager extras
 $web->add('/baas-accountmanager/v1/account/business','api/account-update-business');

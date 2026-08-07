@@ -231,7 +231,60 @@ que não saiu vira linha em `webhook_dispatches` com `status = skipped` e aparec
 entra na resposta HTTP — diagnóstico de mock não é contrato de API.
 Guardado por `tests/webhook_visibilidade_smoke.php`.
 
-## 5. Internals
+## 5. Gatilhos de liquidação — o que a Celcoin faz sozinha e aqui ninguém faz
+
+Dois eventos de ENTRADA de dinheiro não têm quem os provoque no mock: na Celcoin real
+quem paga é alguém de fora (o pagador do Pix, o sacado do boleto no banco dele), e aqui
+esse alguém não existe. Sem um gatilho, o ciclo para na emissão e a metade "o dinheiro
+caiu" nunca é testável.
+
+| gatilho | webhook que emite | ferramenta |
+| --- | --- | --- |
+| `POST /pixqrcode/v2/{locationId}/pagar` | `pix-payment-in` | botão "Simular pagamento" na página `.../ver` |
+| `POST /baas/v2/charge/{txid}/pagar` | `charge-in` | — (curl; a cobrança não tem página) |
+
+**Nenhum dos dois existe na Celcoin.** São ferramentas do mock, e por isso podem devolver
+o que ajuda a conferir (o `/charge/.../pagar` devolve o `creditParty.account` na resposta).
+
+No lugar do `{txid}` serve **qualquer referência que um humano tenha na mão**:
+`transactionId`, `externalId`, linha digitável ou código de barras — pontuação é ignorada.
+Body opcional: `{"valorPago": 354.99, "tipoPagamento": "Boleto"}`; o default é o valor
+integral da cobrança.
+
+```bash
+curl -X POST 'https://cslabs.mfwks.com/celcoin/baas/v2/charge/<txid>/pagar'
+```
+
+**Idempotente**: cobrança já paga responde 200 sem reemitir o webhook. É deliberado — o
+app sai cedo quando o boleto já está PAGO, então uma duplicata passaria batida lá e
+mascararia um defeito de idempotência do consumidor. Cobrança cancelada devolve 409.
+
+### O escopo do dono vale para a inscrição, não só para a gravação
+
+Quem emite é o app, com bearer; quem dispara a liquidação é um curl ou o navegador, sem
+token. Como toda entidade é escopada por `client_id`, os gatilhos resolvem o **dono** da
+cobrança e agem no escopo dele — inclusive para **procurar a inscrição de webhook**, que
+vive no `client_id` do app. Ler a inscrição no escopo de quem disparou devolveria "sem
+inscrição" e o webhook sairia como `skipped` (§4 acima). Vale para os dois gatilhos.
+
+Continua valendo o pré-requisito: **sem `./yii celcoin/cadastrar-webhook charge-in '<url>'`
+no app, não há inscrição e o webhook não sai** — agora com o `skipped` visível dizendo isso.
+
+### O shape do `charge-in` é medido, e não é o do `charge-create`
+
+Conferido num webhook real de produção (06/08/2026): é bem mais enxuto — não repete
+`boleto`, `debtor` nem `receiver`, **não manda `amount`** (o valor vem em `valorPago`) e
+carrega `creditParty`, que é **a conta Celcoin onde o dinheiro assentou**. O
+`creditParty.account` sai do `receiver.account` da cobrança armazenada, nunca de constante:
+comparado com o `boleto.bankAccount` do `charge-create` da mesma cobrança, é ele que
+responde se emissão e liquidação apontam para a mesma conta — o defeito **BOL-011**.
+
+O app não lê esse campo (credita pelo `conta_id` local do boleto), e é justamente por isso
+que ele serve de prova: os dois lados são independentes.
+
+Guardado por `tests/charge_in_smoke.php`.
+
+## 6. Internals
 
 - Catálogo de centavos → cenário: `Cslabs::SCENARIO_BY_CENTS`
 - Resolução: `Cslabs::scenarioFromAmount(mixed $amount, string $default = 'success')`

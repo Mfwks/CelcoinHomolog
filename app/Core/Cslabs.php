@@ -1999,11 +1999,21 @@ class Cslabs
             'transactionIdBRCode' => (string) ($ref['transactionId'] ?? ''),
         ];
 
+        /*
+         * O escopo do dono vale para a INSCRIÇÃO também, não só para a gravação.
+         * Achado em 07/08/2026 ao escrever o gatilho do boleto: quem clica no botão
+         * "Simular pagamento" é o navegador, sem token, e a inscrição de webhook
+         * vive no client_id do app. Sem passar o dono aqui, a busca caía no escopo
+         * do navegador, não achava inscrição nenhuma e o pix-payment-in era
+         * descartado — exatamente a falha silenciosa que este método já evitava na
+         * persistência.
+         */
         self::scheduleWebhook(
             'pix-payment-in',
             self::webhookEnvelope('pix-payment-in', 'CONFIRMED', $webhookBody),
             2,
-            self::webhookSubscriptionUrl('pix-payment-in')
+            self::webhookSubscriptionUrl('pix-payment-in', $clientId),
+            $clientId
         );
 
         return true;
@@ -2656,6 +2666,170 @@ class Cslabs
         ];
     }
 
+    /**
+     * Localiza uma cobrança por qualquer referência que um humano tenha na mão:
+     * `transactionId`, `externalId`, linha digitável ou código de barras — os três
+     * aliases que o `charge.php` já grava na emissão. Pontuação da linha digitável
+     * é ignorada (compara só os dígitos), porque é assim que ela sai de um PDF.
+     *
+     * Devolve `['transactionId', 'clientId', 'charge']` ou null.
+     *
+     * O `clientId` devolvido é o do **dono** da cobrança, e é o ponto todo deste
+     * método: quem emite o boleto é o app, com bearer; quem liquida no mock é o
+     * painel ou um curl, sem token. Escrever no escopo de quem chamou deixaria a
+     * baixa invisível para o app — ver o comentário longo em settleDynamicBrcode.
+     *
+     * Passando `$clientId` explícito, a busca **não sai** desse escopo.
+     */
+    public static function findCharge(string $referencia, ?string $clientId = null): ?array
+    {
+        $referencia = trim($referencia);
+
+        if ($referencia === '') {
+            return null;
+        }
+
+        $escopoFixo = $clientId !== null;
+
+        $localizar = function (string $tipo, string $chave) use ($clientId, $escopoFixo): array {
+            $registro = self::readEntity($tipo, $chave, $clientId);
+            $dono = $clientId;
+
+            if (!is_array($registro) && !$escopoFixo) {
+                $registro = self::readEntityAnyClient($tipo, $chave);
+                $dono = self::entityOwnerClient($tipo, $chave);
+            }
+
+            return [$registro, $dono];
+        };
+
+        [$charge, $dono] = $localizar('charges', $referencia);
+
+        if (is_array($charge)) {
+            return ['transactionId' => $referencia, 'clientId' => $dono, 'charge' => $charge];
+        }
+
+        $chaves = array_values(array_unique(array_filter([
+            $referencia,
+            (string) preg_replace('/\D+/', '', $referencia),
+        ])));
+
+        foreach (['charges_by_external_id', 'charges_by_bank_line', 'charges_by_bar_code'] as $tipo) {
+            foreach ($chaves as $chave) {
+                [$alias, $donoAlias] = $localizar($tipo, $chave);
+
+                if (!is_array($alias) || empty($alias['transactionId'])) {
+                    continue;
+                }
+
+                $txid = (string) $alias['transactionId'];
+                $charge = self::readEntity('charges', $txid, $donoAlias);
+
+                if (is_array($charge)) {
+                    return ['transactionId' => $txid, 'clientId' => $donoAlias, 'charge' => $charge];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Liquida uma cobrança: marca como paga e emite o webhook `charge-in`.
+     *
+     * É o análogo do settleDynamicBrcode para o boleto. Na Celcoin real não há
+     * endpoint disso — o boleto é pago no banco do sacado e o `charge-in` nasce
+     * lá dentro. Aqui não existe quem pague, então o gatilho tem que ser nosso.
+     *
+     * Idempotente: cobrança já paga devolve true **sem reemitir**. O app sai cedo
+     * quando o boleto já está PAGO (ChargeService::processChargeIn), então uma
+     * segunda entrega passaria despercebida lá — e é exatamente por isso que não
+     * se deve gerar: mascararia um defeito de idempotência do consumidor.
+     *
+     * `$pagamento` aceita `valorPago` (default: o valor da cobrança),
+     * `tipoPagamento` e `oldBalance`.
+     */
+    public static function settleCharge(string $transactionId, array $pagamento = [], ?string $clientId = null): bool
+    {
+        $localizada = self::findCharge($transactionId, $clientId);
+
+        if ($localizada === null) {
+            return false;
+        }
+
+        $charge = $localizada['charge'];
+        $transactionId = $localizada['transactionId'];
+        $clientId = $localizada['clientId'];
+        $status = strtoupper((string) ($charge['status'] ?? ''));
+
+        if ($status === 'PAID' || $status === 'CONFIRMED') {
+            return true;
+        }
+
+        if ($status === 'CANCELLED' || $status === 'CANCELED') {
+            return false;
+        }
+
+        $valorOriginal = round((float) ($charge['amount'] ?? 0), 2);
+        $valorPago = round((float) ($pagamento['valorPago'] ?? $valorOriginal), 2);
+
+        if ($valorPago <= 0) {
+            return false;
+        }
+
+        $charge['status'] = 'PAID';
+        $charge['paid_at'] = date(DATE_ATOM);
+        $charge['amountConfirmed'] = $valorPago; // chargeFetchBody já lê este campo
+
+        self::writeEntity('charges', $transactionId, $charge, $clientId);
+
+        /*
+         * Shape MEDIDO num charge-in real de produção (webhook 4501, 06/08/2026 —
+         * evidência da sustentação em `08-06-boletopix-pago-sem-credito-conta-movimento`).
+         * Ele é bem mais enxuto que o do charge-create: não repete boleto, debtor
+         * nem receiver, e **não manda `amount`** — o valor vem em `valorPago`.
+         *
+         * `creditParty.account` é a conta Celcoin onde o dinheiro assenta, e sai do
+         * `receiver.account` da cobrança armazenada, nunca de constante: é ele que
+         * responde "em qual conta caiu", que é o defeito BOL-011. O app não lê esse
+         * campo (credita pelo `conta_id` local do boleto) — justamente por isso ele
+         * serve de prova: os dois lados são independentes, e a conferência é entre
+         * o `bankAccount` do charge-create e o `creditParty.account` daqui.
+         */
+        $duedate = trim((string) ($charge['duedate'] ?? ''));
+        $saldoAnterior = round((float) ($pagamento['oldBalance'] ?? 10000.00), 2);
+
+        $webhookBody = [
+            'dataPagamento' => date('Y-m-d H:i:s'),
+            'dataVencimento' => $duedate === '' ? '' : $duedate . ' 00:00:00',
+            'externalId' => (string) ($charge['externalId'] ?? ''),
+            'status' => 'Pago',
+            'tipoPagamento' => (string) ($pagamento['tipoPagamento'] ?? 'Pix'),
+            'transactionId' => $transactionId,
+            'valorOriginal' => $valorOriginal,
+            'valorPago' => $valorPago,
+            // O mock não mantém razão; o par existe porque a produção manda e alguém
+            // confere na mão. Manter currentBalance = oldBalance + valorPago é o que
+            // impede o par de mentir.
+            'currentBalance' => round($saldoAnterior + $valorPago, 2),
+            'oldBalance' => $saldoAnterior,
+            'creditParty' => [
+                'taxId' => (string) self::arrayGet($charge, 'receiver.document'),
+                'account' => (string) self::arrayGet($charge, 'receiver.account'),
+            ],
+        ];
+
+        self::scheduleWebhook(
+            'charge-in',
+            self::webhookEnvelope('charge-in', 'CONFIRMED', $webhookBody),
+            2,
+            self::webhookSubscriptionUrl('charge-in', $clientId),
+            $clientId
+        );
+
+        return true;
+    }
+
     public static function billPaymentStatusRender(array $state, bool $confirmed): array
     {
         $body = [
@@ -2679,9 +2853,16 @@ class Cslabs
         ];
     }
 
-    public static function webhookSubscription(string $entity): array|false
+    /**
+     * `$clientId` só é passado pelos gatilhos de teste do mock (os `.../pagar`),
+     * onde quem dispara não é quem assinou: a inscrição vive no escopo do app,
+     * que tem bearer, e o gatilho é chamado pelo navegador, que não tem. Ler no
+     * escopo de quem chamou devolveria "sem inscrição" e o webhook não sairia —
+     * a mesma falha silenciosa que o escopo do dono já resolve na persistência.
+     */
+    public static function webhookSubscription(string $entity, ?string $clientId = null): array|false
     {
-        return self::readEntity('webhook_subscriptions', $entity);
+        return self::readEntity('webhook_subscriptions', $entity, $clientId);
     }
 
     public static function listWebhookSubscriptions(): array
@@ -2697,9 +2878,9 @@ class Cslabs
         return $items;
     }
 
-    public static function webhookSubscriptionUrl(string $entity): ?string
+    public static function webhookSubscriptionUrl(string $entity, ?string $clientId = null): ?string
     {
-        $subscription = self::webhookSubscription($entity);
+        $subscription = self::webhookSubscription($entity, $clientId);
         $url = trim((string) ($subscription['webhookUrl'] ?? ''));
 
         return filter_var($url, FILTER_VALIDATE_URL) ? $url : null;
@@ -2790,6 +2971,14 @@ class Cslabs
         $id = gerarHashMock();
         $now = gmdate('Y-m-d\TH:i:s\Z');
         $endToEnd = 'E13935893' . date('YmdHi') . substr($id, 0, 11);
+
+        // Único trecho que charge-create e charge-in ainda compartilham.
+        $erroCharge = [
+            'error' => ['message' => 'Falha em geração de boleto, favor tente novamente.'],
+            'externalId' => '0000000001',
+            'status' => 'ERROR',
+            'transactionId' => $id,
+        ];
 
         return match ($entity) {
             'onboarding-create' => [
@@ -2893,12 +3082,31 @@ class Cslabs
                 'currentBalance' => null,
                 'oldBalance' => null,
             ],
-            'charge-create', 'charge-in' => $status === 'ERROR' ? [
-                'error' => ['message' => 'Falha em geração de boleto, favor tente novamente.'],
+            /*
+             * charge-in tem shape PRÓPRIO, não é o do charge-create com outro status.
+             * Medido em produção (06/08/2026): é bem mais enxuto, não repete boleto/
+             * debtor/receiver, não manda `amount` — o valor vem em `valorPago` — e
+             * carrega `creditParty`, que é onde o dinheiro assentou. Enquanto os dois
+             * dividiam este braço, o exemplo do painel ensinava um shape que a produção
+             * não usa, e sem o campo que decide o BOL-011.
+             */
+            'charge-in' => $status === 'ERROR' ? $erroCharge : [
+                'dataPagamento' => date('Y-m-d H:i:s'),
+                'dataVencimento' => date('Y-m-d 00:00:00', strtotime('+3 days')),
                 'externalId' => '0000000001',
-                'status' => 'ERROR',
+                'status' => 'Pago',
+                'tipoPagamento' => 'Pix',
                 'transactionId' => $id,
-            ] : [
+                'valorOriginal' => 2256.27,
+                'valorPago' => 2256.27,
+                'currentBalance' => 12256.27,
+                'oldBalance' => 10000.00,
+                'creditParty' => [
+                    'taxId' => '49966300000119',
+                    'account' => '300541554121',
+                ],
+            ],
+            'charge-create' => $status === 'ERROR' ? $erroCharge : [
                 'amount' => 2256.27,
                 'boleto' => [
                     'transactionId' => self::chargeBoletoIds($id)['transactionId'],
@@ -3014,10 +3222,11 @@ class Cslabs
      * consome estes streams lê caminho fixo, e a Celcoin real não devolveria nada
      * parecido. Diagnóstico de mock não é contrato de API.
      */
-    private static function noteWebhookSkipped(string $event, ?string $url): void
+    private static function noteWebhookSkipped(string $event, ?string $url, ?string $clientId = null): void
     {
         $context = self::context();
-        $inscricao = self::webhookSubscription($event);
+        $clientId ??= $context['client_id'];
+        $inscricao = self::webhookSubscription($event, $clientId);
 
         $motivo = is_array($inscricao)
             ? sprintf("há inscrição para '%s', mas o webhookUrl não é uma URL válida (%s)", $event, var_export($url, true))
@@ -3026,14 +3235,15 @@ class Cslabs
         $entry = [
             'webhook_id'  => 'wh_skip_' . bin2hex(random_bytes(6)),
             'request_id'  => $context['request_id'],
-            'client_id'   => $context['client_id'],
+            'client_id'   => $clientId,
             'event'       => $event,
             'status'      => 'skipped',
             'target_url'  => null,
             'reason'      => $motivo,
             'fix'         => sprintf(
-                'POST /baas/v2/webhook/subscription {"entity":"%s","webhookUrl":"https://<app>/…"} com o MESMO bearer que fez esta request — a inscrição é por client_id.',
-                $event
+                'POST /baas/v2/webhook/subscription {"entity":"%s","webhookUrl":"https://<app>/…"} com o bearer do client_id %s — a inscrição é por client_id, e o que vale é o do DONO da entidade, não o de quem disparou.',
+                $event,
+                $clientId
             ),
             'skipped_at'  => date(DATE_ATOM),
         ];
@@ -3041,18 +3251,26 @@ class Cslabs
         self::$webhookSkips[] = $entry;
         self::registerWebhook($entry);
     }
-    public static function scheduleWebhook(string $event, array $payload, int $delaySeconds = 2, ?string $url = null): bool
+
+    /**
+     * `$clientId` é o DONO do webhook — de quem é a inscrição e em cujo painel o
+     * despacho aparece. Default: quem fez a request, que é o caso de todo stream
+     * que imita a Celcoin. Só os gatilhos de teste do mock passam outro, porque
+     * neles quem dispara não é quem assinou (ver webhookSubscription).
+     */
+    public static function scheduleWebhook(string $event, array $payload, int $delaySeconds = 2, ?string $url = null, ?string $clientId = null): bool
     {
+        $context = self::context();
+        $clientId ??= $context['client_id'];
+
         if (!$url || !filter_var($url, FILTER_VALIDATE_URL)) {
-            self::noteWebhookSkipped($event, $url);
+            self::noteWebhookSkipped($event, $url, $clientId);
             return false;
         }
 
-        $context = self::context();
         $requestId = $context['request_id'];
-        $clientId = $context['client_id'];
         $webhookId = 'wh_' . bin2hex(random_bytes(8));
-        $subscription = self::webhookSubscription($event);
+        $subscription = self::webhookSubscription($event, $clientId);
         $auth = is_array($subscription) && is_array($subscription['auth'] ?? null) ? $subscription['auth'] : null;
 
         self::registerWebhook([

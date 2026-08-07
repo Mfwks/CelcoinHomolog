@@ -13,6 +13,11 @@ O microframework não restringe método HTTP no roteador; o método aceito é de
 | `/endpoints`            | `api/endpoints`             | Lista as rotas registradas (introspecção).   |
 | `/shots/{identifier}/`  | `api/shots`                 | Captura/inspeção de chamadas.                |
 | `/pages`, `/400`..`/504`, `/maintenance`, `/status`, `/status-fake` | `pages/*` | Páginas de erro e status. |
+| `/pixqrcode/novo`, `/pixqrcode/v2/{id}/{ver,imagem,pagar}` | `api/pix-location-*` | Ferramentas de teste do QR: gerar, ver, imagem e **liquidar** (emite `pix-payment-in`). |
+| `/baas/v2/charge/{txid}/pagar` | `api/charge-pagar`         | Liquida a cobrança e emite `charge-in`. Aceita txid, externalId, linha digitável ou código de barras. |
+
+⚠️ As duas últimas linhas **não existem na Celcoin** — são os gatilhos que substituem quem
+paga (o pagador do Pix, o sacado do boleto), que no mock não existe. Ver `docs/scenarios.md` §5.
 
 ## Rotas Celcoin
 
