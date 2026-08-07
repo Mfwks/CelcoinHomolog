@@ -3289,6 +3289,15 @@ class Cslabs
             'webhook_id'    => $webhookId,
             'request_id'    => $requestId,
             'client_id'     => $clientId,
+            /*
+             * O despacho é do DONO, mas o SHOT é de quem fez a request — e nos gatilhos
+             * de teste esses dois não são a mesma pessoa. Sem carregar o escopo da
+             * interação, a anexação procurava o shot do `/pagar` no escopo do app, não
+             * achava, e o desfecho da entrega não aparecia em painel nenhum: nem no do
+             * dono (que não tem essa interação) nem no de quem disparou (onde a linha
+             * existe, mas o append nunca chegou). Medido no cslabs em 07/08/2026.
+             */
+            'interaction_client_id' => $context['client_id'],
             'event'         => $event,
             'url'           => $url,
             'payload'       => $payload,
@@ -3353,7 +3362,8 @@ class Cslabs
         ];
 
         self::registerWebhook($entry);
-        self::appendWebhookToInteraction($requestId, $entry, $clientId);
+        // O shot pode ser de outro cliente que o despacho — ver scheduleWebhook.
+        self::appendWebhookToInteraction($requestId, $entry, (string) ($dispatch['interaction_client_id'] ?? '') ?: $clientId);
     }
 
     private static function spawnWebhookWorker(array $dispatch): bool

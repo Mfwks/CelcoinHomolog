@@ -193,6 +193,40 @@ smoke_ok(
     'envelope: webhookId = transactionId, como no charge-in real'
 );
 
+/*
+ * E o desfecho da entrega tem que aparecer no shot do `/pagar` — que é a tela em que
+ * se procura "cadê meu webhook?". Este é o par cruzado: o DESPACHO é do dono, o SHOT é
+ * de quem disparou, e sem carregar os dois escopos a anexação não achava a interação e
+ * o desfecho não aparecia em painel nenhum. Medido no cslabs em 07/08/2026, com o
+ * gatilho já no ar e funcionando — o furo era só de visibilidade.
+ */
+$shotDoPagar = function () {
+    $stmt = smoke_db()->prepare(
+        "SELECT data FROM interactions WHERE path LIKE '%/pagar%' ORDER BY received_at_us DESC LIMIT 1"
+    );
+    $stmt->execute();
+    $dados = json_decode((string) $stmt->fetchColumn(), true);
+
+    return is_array($dados['webhooks'] ?? null) ? $dados['webhooks'] : [];
+};
+
+$anexado = [];
+for ($i = 0; $i < 40; $i++) {
+    usleep(500000);
+    $anexado = $shotDoPagar();
+
+    if ($anexado !== []) {
+        break;
+    }
+}
+
+smoke_ok($anexado !== [], 'visibilidade: o desfecho da entrega aparece no shot do /pagar, que é onde se procura');
+smoke_ok(
+    ($anexado[0]['event'] ?? '') === 'charge-in' && in_array($anexado[0]['status'] ?? '', ['delivered', 'failed'], true),
+    'visibilidade: e o que aparece é o charge-in com desfecho, não um "scheduled" eterno — veio: '
+        . ($anexado[0]['status'] ?? '(nada)')
+);
+
 # ── 4. Idempotência ──────────────────────────────────────────────────────────
 [, $repetida, $httpRepetida] = smoke_http($host, 'POST', '/baas/v2/charge/' . $txid . '/pagar', [], null);
 
