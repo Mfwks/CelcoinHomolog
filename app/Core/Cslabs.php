@@ -9,6 +9,9 @@ class Cslabs
     /** Webhooks que esta request deixou de agendar — ver noteWebhookSkipped(). */
     private static array $webhookSkips = [];
 
+    /** Memo de phpCliBinary(): `false` = ainda não procurado, `null` = não achou. */
+    private static string|null|false $phpCliBinary = false;
+
     public static function boot(array $meta = []): array
     {
         if (self::$context !== null) {
@@ -421,6 +424,16 @@ class Cslabs
         ], '__global__');
     }
 
+    /**
+     * Entidades que o mock sabe emitir. `known_entity:false` na inscrição é o
+     * aviso de que ninguém vai disparar aquilo — então a lista tem que bater com
+     * quem chama `scheduleWebhook()`, senão o aviso mente. Em 07/08/2026 quatro
+     * emitidas estavam de fora: `charge-in`, `account-status`,
+     * `onboarding-proposal` e `pix-reversal-out`. Conferência (o `-A1` é porque
+     * metade das chamadas quebra a linha depois do parêntese):
+     *
+     *   grep -rhA1 "scheduleWebhook(" app --include=*.php | grep -o "'[a-z-]\+'"
+     */
     public static function knownWebhookEntities(): array
     {
         return [
@@ -438,7 +451,11 @@ class Cslabs
             'spb-reversal-in',
             'spb-reversal-out',
             'charge-create',
+            'charge-in',
             'charge-canceled',
+            'account-status',
+            'onboarding-proposal',
+            'pix-reversal-out',
             'billpayment',
             'billpayment-occurrence',
             'judicial-movement-in',
@@ -2944,6 +2961,70 @@ class Cslabs
         }
     }
 
+    /**
+     * Defeitos que tornam a URL INENTREGÁVEL — rótulo vazio no host não resolve em
+     * DNS nenhum, e a entrega morre em "could not resolve host".
+     *
+     * O `filter_var(FILTER_VALIDATE_URL)` do stream já existe desde 17/04/2026 e,
+     * no PHP 8.4 daqui, recusa `https://.e-bancos.com.br/…`. Mesmo assim foi
+     * exatamente isso que ficou inscrito em `charge-create` no cslabs até
+     * 07/08/2026 — ou seja, o veredito daquele filtro não é o mesmo em toda versão
+     * de PHP, e o do host não foi medido. Esta checagem não depende de versão e,
+     * ao contrário do filtro, **diz qual é o defeito** em vez de só recusar.
+     */
+    public static function webhookUrlErrors(string $url): array
+    {
+        $url = trim($url);
+
+        if ($url === '') {
+            return ['URL vazia.'];
+        }
+
+        $partes = parse_url($url);
+        if (!is_array($partes)) {
+            return ['URL não é analisável.'];
+        }
+
+        $erros = [];
+        $esquema = strtolower((string) ($partes['scheme'] ?? ''));
+        $host = (string) ($partes['host'] ?? '');
+
+        if (!in_array($esquema, ['http', 'https'], true)) {
+            $erros[] = sprintf('Esquema "%s" não entrega webhook — use http ou https.', $esquema);
+        }
+
+        if ($host === '') {
+            $erros[] = 'URL sem host.';
+        } elseif (!filter_var($host, FILTER_VALIDATE_IP) && preg_match('/^\.|\.$|\.\./', $host)) {
+            $erros[] = sprintf('Host "%s" tem rótulo vazio (ponto sobrando) — não resolve em DNS.', $host);
+        }
+
+        return $erros;
+    }
+
+    /**
+     * Suspeitas que NÃO bloqueiam: a URL entrega, mas cheira a copia-e-cola. O
+     * caso real é `?r=r=boleto/webhook/celcoin/charge-create`, com o `r=` colado
+     * duas vezes — genérico de propósito, qualquer `k=k=…` cai aqui.
+     */
+    public static function webhookUrlWarnings(string $url): array
+    {
+        $query = (string) (parse_url(trim($url), PHP_URL_QUERY) ?? '');
+        if ($query === '') {
+            return [];
+        }
+
+        $avisos = [];
+        foreach (explode('&', $query) as $par) {
+            [$chave, $valor] = array_pad(explode('=', $par, 2), 2, '');
+            if ($chave !== '' && str_starts_with($valor, $chave . '=')) {
+                $avisos[] = sprintf('Parâmetro "%s" aparece duplicado no valor ("%s=%s…") — copia-e-cola?', $chave, $chave, $chave);
+            }
+        }
+
+        return $avisos;
+    }
+
     public static function saveWebhookSubscription(string $entity, string $url, ?array $auth = null, array $raw = [], bool $active = true): array
     {
         $existing = self::webhookSubscription($entity);
@@ -2956,6 +3037,7 @@ class Cslabs
             'auth' => $auth,
             'active' => $active,
             'known_entity' => in_array($entity, $knownEntities, true),
+            'url_warnings' => self::webhookUrlWarnings($url),
             'updated_at' => $now,
             'created_at' => is_array($existing) ? ($existing['created_at'] ?? $now) : $now,
             'raw_request' => $raw,
@@ -3260,34 +3342,92 @@ class Cslabs
      */
     public static function scheduleWebhook(string $event, array $payload, int $delaySeconds = 2, ?string $url = null, ?string $clientId = null): bool
     {
+        $dispatch = self::buildWebhookDispatch($event, $payload, $delaySeconds, $url, $clientId);
+
+        if ($dispatch === null) {
+            return false;
+        }
+
+        /*
+         * O modo é decidido ANTES de registrar porque o registro é upsert: se a linha
+         * `scheduled` fosse gravada depois do worker já ter entregue, o `delivered`
+         * dele voltaria a `scheduled`.
+         */
+        $impedimentos = self::webhookWorkerBlockers();
+        self::registerScheduledWebhook($dispatch, $impedimentos === [] ? 'worker' : 'shutdown', $impedimentos);
+
+        if ($impedimentos === [] && self::spawnWebhookWorker($dispatch)) {
+            return true;
+        }
+
+        if ($impedimentos === []) {
+            $impedimentos = ['O worker parecia utilizável, mas o spawn falhou (escrita do dispatch ou exec).'];
+            self::registerScheduledWebhook($dispatch, 'shutdown', $impedimentos);
+        }
+
+        /*
+         * Fallback in-process via shutdown. Em SAPI sem finish_request a entrega
+         * bloqueia a resposta — mas pelo menos acontece. O LiteSpeed, que é o que
+         * roda em boa parte da hospedagem compartilhada, tem a função com OUTRO
+         * nome; sem esta linha ele caía no caminho bloqueante sem necessidade.
+         */
+        register_shutdown_function(static function () use ($dispatch): void {
+            if (function_exists('fastcgi_finish_request')) {
+                fastcgi_finish_request();
+            } elseif (function_exists('litespeed_finish_request')) {
+                litespeed_finish_request();
+            }
+            self::deliverScheduledWebhook($dispatch);
+        });
+
+        return true;
+    }
+
+    /**
+     * Entrega AGORA, no processo da request, e devolve o desfecho verdadeiro
+     * (`delivered`/`failed`, código HTTP, corpo da resposta do app).
+     *
+     * Existe porque no cslabs hospedado nenhum webhook agendado sai — nem pelo
+     * worker, nem pelo shutdown (medido pelo QA em 07/08/2026, zero requests
+     * inbound do IP de egresso do mock). O "agendado" da resposta escondia a
+     * falha: o teste dava OK e nada chegava. Gatilho de teste tem que entregar e
+     * dizer o que aconteceu.
+     */
+    public static function deliverWebhookNow(string $event, array $payload, ?string $url = null, ?string $clientId = null): ?array
+    {
+        $dispatch = self::buildWebhookDispatch($event, $payload, 0, $url, $clientId);
+
+        if ($dispatch === null) {
+            return null;
+        }
+
+        self::registerScheduledWebhook($dispatch, 'sync');
+
+        return self::deliverScheduledWebhook($dispatch);
+    }
+
+    /**
+     * Monta o envelope de despacho e resolve o `auth` da inscrição do DONO.
+     * Devolve null quando a URL não serve — o skip já fica registrado.
+     *
+     * Separado de `scheduleWebhook()` porque os dois modos de entrega (agendar e
+     * entregar na hora) só diferem no final.
+     */
+    private static function buildWebhookDispatch(string $event, array $payload, int $delaySeconds, ?string $url, ?string $clientId): ?array
+    {
         $context = self::context();
         $clientId ??= $context['client_id'];
 
         if (!$url || !filter_var($url, FILTER_VALIDATE_URL)) {
             self::noteWebhookSkipped($event, $url, $clientId);
-            return false;
+            return null;
         }
 
-        $requestId = $context['request_id'];
-        $webhookId = 'wh_' . bin2hex(random_bytes(8));
         $subscription = self::webhookSubscription($event, $clientId);
-        $auth = is_array($subscription) && is_array($subscription['auth'] ?? null) ? $subscription['auth'] : null;
 
-        self::registerWebhook([
-            'webhook_id' => $webhookId,
-            'request_id' => $requestId,
-            'client_id' => $clientId,
-            'event' => $event,
-            'status' => 'scheduled',
-            'target_url' => $url,
-            'payload' => $payload,
-            'scheduled_at' => date(DATE_ATOM),
-            'delay_seconds' => $delaySeconds,
-        ]);
-
-        $dispatch = [
-            'webhook_id'    => $webhookId,
-            'request_id'    => $requestId,
+        return [
+            'webhook_id'    => 'wh_' . bin2hex(random_bytes(8)),
+            'request_id'    => $context['request_id'],
             'client_id'     => $clientId,
             /*
              * O despacho é do DONO, mas o SHOT é de quem fez a request — e nos gatilhos
@@ -3301,25 +3441,35 @@ class Cslabs
             'event'         => $event,
             'url'           => $url,
             'payload'       => $payload,
-            'auth'          => $auth,
-            'delay_seconds' => $delaySeconds,
+            'auth'          => is_array($subscription) && is_array($subscription['auth'] ?? null) ? $subscription['auth'] : null,
+            'delay_seconds' => max(0, $delaySeconds),
         ];
+    }
 
-        if (self::spawnWebhookWorker($dispatch)) {
-            return true;
-        }
-
-        # Fallback se exec() estiver indisponível: dispatch in-process via shutdown.
-        # Em SAPIs sem fastcgi_finish_request a entrega vai bloquear a resposta —
-        # mas pelo menos ainda acontece.
-        register_shutdown_function(static function () use ($dispatch): void {
-            if (function_exists('fastcgi_finish_request')) {
-                fastcgi_finish_request();
-            }
-            self::deliverScheduledWebhook($dispatch);
-        });
-
-        return true;
+    /**
+     * Grava a linha `scheduled`. O `delivery_mode` registra por qual caminho a
+     * entrega foi tentada e os `delivery_notes` dizem por que o worker foi
+     * descartado — é o que permite diagnosticar o host pelo painel, sem shell.
+     *
+     * O `interaction_client_id` vai junto porque o flush precisa dele para achar
+     * o shot depois, e o envelope em memória não sobrevive à request.
+     */
+    private static function registerScheduledWebhook(array $dispatch, string $modo, array $notas = []): void
+    {
+        self::registerWebhook([
+            'webhook_id'            => $dispatch['webhook_id'],
+            'request_id'            => $dispatch['request_id'],
+            'client_id'             => $dispatch['client_id'],
+            'interaction_client_id' => $dispatch['interaction_client_id'],
+            'event'                 => $dispatch['event'],
+            'status'                => 'scheduled',
+            'target_url'            => $dispatch['url'],
+            'payload'               => $dispatch['payload'],
+            'scheduled_at'          => date(DATE_ATOM),
+            'delay_seconds'         => $dispatch['delay_seconds'],
+            'delivery_mode'         => $modo,
+            'delivery_notes'        => $notas,
+        ]);
     }
 
     /**
@@ -3328,7 +3478,7 @@ class Cslabs
      * Recebe o `client_id` explícito porque é invocada fora do contexto HTTP
      * (pelo worker spawnado em `bin/webhook-worker.php`).
      */
-    public static function deliverScheduledWebhook(array $dispatch): void
+    public static function deliverScheduledWebhook(array $dispatch): ?array
     {
         $url       = (string) ($dispatch['url'] ?? '');
         $payload   = is_array($dispatch['payload'] ?? null) ? $dispatch['payload'] : [];
@@ -3340,10 +3490,17 @@ class Cslabs
         $auth      = is_array($dispatch['auth'] ?? null) ? $dispatch['auth'] : null;
 
         if ($url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
-            return;
+            return null;
         }
 
         sleep(max(0, $delay));
+
+        # Depois do sleep, não antes: quem chega primeiro na hora de mandar é quem
+        # entrega. Sem isto, worker e flush entregariam o mesmo webhook duas vezes.
+        if (!self::claimWebhookDispatch($clientId, $webhookId)) {
+            return null;
+        }
+
         $sentAt = date(DATE_ATOM);
         $result = self::sendJsonRequest($url, $payload, $auth);
 
@@ -3362,38 +3519,296 @@ class Cslabs
         ];
 
         self::registerWebhook($entry);
-        // O shot pode ser de outro cliente que o despacho — ver scheduleWebhook.
+        // O shot pode ser de outro cliente que o despacho — ver buildWebhookDispatch.
         self::appendWebhookToInteraction($requestId, $entry, (string) ($dispatch['interaction_client_id'] ?? '') ?: $clientId);
+
+        return $entry;
     }
 
-    private static function spawnWebhookWorker(array $dispatch): bool
+    /**
+     * Passa o despacho de `scheduled` para `delivering`, condicionalmente — só um
+     * processo ganha. Sem linha no banco (despacho montado fora dele) a entrega
+     * segue: o claim protege contra duplicata, não contra ausência de registro.
+     */
+    private static function claimWebhookDispatch(string $clientId, string $webhookId): bool
+    {
+        if ($clientId === '' || $webhookId === '') {
+            return true;
+        }
+
+        $webhookId = self::safeName($webhookId);
+        $pdo = Db::pdo();
+
+        $stmt = $pdo->prepare(
+            "UPDATE webhook_dispatches SET status = 'delivering', updated_at = :u
+             WHERE client_id = :c AND webhook_id = :w AND status = 'scheduled'"
+        );
+        $stmt->execute([':u' => date(DATE_ATOM), ':c' => $clientId, ':w' => $webhookId]);
+
+        if ($stmt->rowCount() > 0) {
+            return true;
+        }
+
+        $existe = $pdo->prepare('SELECT 1 FROM webhook_dispatches WHERE client_id = :c AND webhook_id = :w LIMIT 1');
+        $existe->execute([':c' => $clientId, ':w' => $webhookId]);
+
+        return $existe->fetchColumn() === false;
+    }
+
+    /**
+     * Despachos ainda por entregar, do mais antigo para o mais novo.
+     *
+     * Primeira LEITURA de `webhook_dispatches` no projeto: a tabela era só de
+     * escrita — o painel mostra os webhooks por `interactions.webhooks[]`. É ela
+     * que faz o papel de fila drenável, e por isso o registro `scheduled` carrega
+     * payload e escopo da interação.
+     */
+    public static function pendingWebhookDispatches(?string $clientId = null, ?string $event = null, int $limit = 50): array
+    {
+        $clientId ??= self::context()['client_id'];
+
+        $sql = "SELECT data FROM webhook_dispatches WHERE client_id = :c AND status = 'scheduled'";
+        $params = [':c' => $clientId];
+
+        if ($event !== null && $event !== '') {
+            $sql .= ' AND event = :e';
+            $params[':e'] = $event;
+        }
+
+        $sql .= ' ORDER BY created_at ASC LIMIT ' . max(1, min(500, $limit));
+
+        $stmt = Db::pdo()->prepare($sql);
+        $stmt->execute($params);
+
+        $itens = [];
+        foreach ($stmt->fetchAll(\PDO::FETCH_COLUMN) as $raw) {
+            $registro = json_decode((string) $raw, true);
+            if (is_array($registro)) {
+                $itens[] = $registro;
+            }
+        }
+
+        return $itens;
+    }
+
+    /**
+     * Drena os pendentes ENTREGANDO na hora e devolve o desfecho de cada um. O
+     * delay agendado é ignorado de propósito — quem chamou o flush já está
+     * esperando. É o caminho para o fluxo realista (`/pagar`, `charge-create`)
+     * num host onde o background não roda.
+     */
+    public static function flushWebhookDispatches(?string $clientId = null, ?string $event = null, int $limit = 50): array
+    {
+        $clientId ??= self::context()['client_id'];
+        $desfechos = [];
+
+        foreach (self::pendingWebhookDispatches($clientId, $event, $limit) as $registro) {
+            $entry = self::deliverScheduledWebhook(self::dispatchFromRegistry($registro, $clientId));
+
+            $desfechos[] = $entry ?? [
+                'webhook_id' => $registro['webhook_id'] ?? null,
+                'event'      => $registro['event'] ?? null,
+                'target_url' => $registro['target_url'] ?? null,
+                'status'     => 'claimed_elsewhere',
+                'error'      => 'Outro processo pegou este despacho antes.',
+            ];
+        }
+
+        return $desfechos;
+    }
+
+    /**
+     * Reconstrói o envelope a partir do registro. O `auth` não é regravado no
+     * registro — sai da inscrição, exatamente como no agendamento, para não
+     * duplicar credencial em duas tabelas.
+     */
+    private static function dispatchFromRegistry(array $registro, string $clientId): array
+    {
+        $event = (string) ($registro['event'] ?? '');
+        $subscription = self::webhookSubscription($event, $clientId);
+
+        return [
+            'webhook_id'            => (string) ($registro['webhook_id'] ?? ''),
+            'request_id'            => (string) ($registro['request_id'] ?? ''),
+            'client_id'             => $clientId,
+            'interaction_client_id' => (string) ($registro['interaction_client_id'] ?? $clientId),
+            'event'                 => $event,
+            'url'                   => (string) ($registro['target_url'] ?? ''),
+            'payload'               => is_array($registro['payload'] ?? null) ? $registro['payload'] : [],
+            'auth'                  => is_array($subscription) && is_array($subscription['auth'] ?? null) ? $subscription['auth'] : null,
+            'delay_seconds'         => 0,
+        ];
+    }
+
+    /**
+     * O binário PHP de LINHA DE COMANDO.
+     *
+     * Sob mod_php/FPM, `PHP_BINARY` é o binário do SERVIDOR (`php-fpm`, `httpd`) —
+     * mandar um script para ele não executa nada. E como o spawn é `exec(… &)`,
+     * ninguém fica sabendo: o `exec` volta sem erro, o worker nunca roda, o
+     * webhook nunca sai. É a suspeita (c) do briefing de 07/08/2026 e a única das
+     * três que dá para eliminar sem acesso ao host.
+     */
+    public static function phpCliBinary(): ?string
+    {
+        if (self::$phpCliBinary !== false) {
+            return self::$phpCliBinary;
+        }
+
+        $candidatos = PHP_SAPI === 'cli' ? [PHP_BINARY] : [];
+        $candidatos[] = PHP_BINDIR . '/php';
+        $candidatos[] = PHP_BINDIR . '/php' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
+        $candidatos[] = '/usr/local/bin/php';
+        $candidatos[] = '/usr/bin/php';
+        # Layout de hospedagem compartilhada com cPanel/EasyApache.
+        $candidatos[] = sprintf('/opt/cpanel/ea-php%d%d/root/usr/bin/php', PHP_MAJOR_VERSION, PHP_MINOR_VERSION);
+
+        self::$phpCliBinary = null;
+        foreach (array_unique(array_filter($candidatos)) as $candidato) {
+            if (@is_executable($candidato)) {
+                self::$phpCliBinary = $candidato;
+                break;
+            }
+        }
+
+        return self::$phpCliBinary;
+    }
+
+    private static function webhookWorkerPath(): string
+    {
+        return (defined('APP') ? APP : __DIR__ . '/../') . 'bin/webhook-worker.php';
+    }
+
+    private static function webhookDispatchDir(): string
+    {
+        return (defined('TMP') ? TMP : sys_get_temp_dir() . '/') . 'cslabs/dispatches';
+    }
+
+    private static function execDisponivel(): bool
     {
         if (!function_exists('exec')) {
             return false;
         }
-        $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
-        if (in_array('exec', $disabled, true)) {
+
+        $desabilitadas = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+
+        return !in_array('exec', $desabilitadas, true);
+    }
+
+    /**
+     * Por que o worker em background NÃO serve neste host. Lista vazia = serve.
+     */
+    public static function webhookWorkerBlockers(): array
+    {
+        $motivos = [];
+
+        if (!self::execDisponivel()) {
+            $motivos[] = 'exec() indisponível (inexistente ou em disable_functions).';
+        }
+
+        if (self::phpCliBinary() === null) {
+            $motivos[] = sprintf('Nenhum PHP de CLI executável encontrado (PHP_BINARY=%s, SAPI=%s).', PHP_BINARY, PHP_SAPI);
+        }
+
+        $worker = self::webhookWorkerPath();
+        if (!is_file($worker)) {
+            $motivos[] = sprintf('Worker ausente em %s.', $worker);
+        }
+
+        $dir = self::webhookDispatchDir();
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            $motivos[] = sprintf('Pasta de dispatches não pôde ser criada: %s.', $dir);
+        } elseif (!is_writable($dir)) {
+            $motivos[] = sprintf('Pasta de dispatches não é gravável: %s.', $dir);
+        }
+
+        return $motivos;
+    }
+
+    /**
+     * Fotografia do transporte de webhook NESTE host.
+     *
+     * Existe porque a causa do "agendado mas nunca entregue" no cslabs não é
+     * mensurável de fora — é config de PHP do hospedado. Um GET responde qual
+     * ramo roda e por quê, inclusive rodando o candidato a CLI para ver se ele é
+     * mesmo CLI. Sem isto a resposta seria adivinhação com três suspeitas.
+     */
+    public static function webhookDeliveryDiagnostics(): array
+    {
+        $php = self::phpCliBinary();
+        $impedimentos = self::webhookWorkerBlockers();
+        $dir = self::webhookDispatchDir();
+        $worker = self::webhookWorkerPath();
+
+        $cli = ['binario' => $php, 'sapi' => null, 'versao' => null, 'erro' => null];
+
+        if ($php !== null && self::execDisponivel()) {
+            $saida = [];
+            $codigo = 0;
+            @exec(escapeshellarg($php) . ' -r ' . escapeshellarg('echo PHP_SAPI, " ", PHP_VERSION;') . ' 2>&1', $saida, $codigo);
+            $texto = trim(implode(' ', $saida));
+            [$sapi, $versao] = array_pad(explode(' ', $texto, 2), 2, null);
+            $cli['sapi'] = $codigo === 0 ? ($sapi ?: null) : null;
+            $cli['versao'] = $codigo === 0 ? $versao : null;
+            $cli['erro'] = $codigo === 0 ? null : sprintf('exit %d: %s', $codigo, $texto);
+        }
+
+        $arquivosPendentes = @glob($dir . '/*.json');
+
+        return [
+            'sapi_web'                 => PHP_SAPI,
+            'php_binary'               => PHP_BINARY,
+            'php_bindir'               => PHP_BINDIR,
+            'cli'                      => $cli,
+            'exec_disponivel'          => self::execDisponivel(),
+            'disable_functions'        => (string) ini_get('disable_functions'),
+            'fastcgi_finish_request'   => function_exists('fastcgi_finish_request'),
+            'litespeed_finish_request' => function_exists('litespeed_finish_request'),
+            'curl'                     => function_exists('curl_init'),
+            'worker'                   => ['caminho' => $worker, 'existe' => is_file($worker)],
+            'dispatches'               => [
+                'caminho'  => $dir,
+                'existe'   => is_dir($dir),
+                'gravavel' => is_dir($dir) && is_writable($dir),
+                'arquivos' => is_array($arquivosPendentes) ? count($arquivosPendentes) : 0,
+            ],
+            'worker_utilizavel'        => $impedimentos === [],
+            'impedimentos'             => $impedimentos,
+            'modo_de_entrega'          => $impedimentos === [] ? 'worker em background' : 'shutdown in-process (use sync/flush para determinismo)',
+            'pendentes'                => count(self::pendingWebhookDispatches(null, null, 500)),
+        ];
+    }
+
+    private static function spawnWebhookWorker(array $dispatch): bool
+    {
+        $php = self::phpCliBinary();
+
+        if ($php === null || !self::execDisponivel()) {
             return false;
         }
 
-        $dir = (defined('TMP') ? TMP : sys_get_temp_dir() . '/') . 'cslabs/dispatches';
+        $worker = self::webhookWorkerPath();
+        if (!is_file($worker)) {
+            return false;
+        }
+
+        $dir = self::webhookDispatchDir();
         if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
             return false;
         }
 
         $file = $dir . '/' . ($dispatch['webhook_id'] ?? bin2hex(random_bytes(8))) . '.json';
-        if (file_put_contents($file, Json::pretty($dispatch)) === false) {
+        if (@file_put_contents($file, Json::pretty($dispatch)) === false) {
             return false;
         }
 
-        $worker = (defined('APP') ? APP : __DIR__ . '/../') . 'bin/webhook-worker.php';
-        $php    = PHP_BINARY !== '' ? PHP_BINARY : 'php';
-
         # Desconecta stdin/stdout/stderr e backgrounda — funciona em php -S,
         # mod_php, FPM e CLI. Independe de fastcgi_finish_request.
+        # `escapeshellarg` no binário, e não `escapeshellcmd`: caminho de CLI em
+        # hospedagem compartilhada tem espaço e ponto, e o cmd não os protege.
         $cmd = sprintf(
             '%s %s %s > /dev/null 2>&1 &',
-            escapeshellcmd($php),
+            escapeshellarg($php),
             escapeshellarg($worker),
             escapeshellarg($file)
         );

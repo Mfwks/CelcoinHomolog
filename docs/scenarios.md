@@ -284,7 +284,92 @@ que ele serve de prova: os dois lados são independentes.
 
 Guardado por `tests/charge_in_smoke.php`.
 
-## 6. Internals
+## 6. Entrega do webhook — agendar não é entregar
+
+Emitir o webhook e **entregá-lo** são problemas diferentes, e o segundo depende do host.
+Medido pelo QA em **07/08/2026**: no cslabs hospedado, todo webhook agendado respondia
+`"Webhook agendado"` e **nunca saía** — zero requests inbound do IP de egresso do mock,
+do lado do app. O 200 dava a impressão de que tinha disparado.
+
+Os três caminhos de entrega, do mais realista ao mais determinístico:
+
+| modo | quem entrega | quando serve |
+| --- | --- | --- |
+| `worker` | processo destacado (`exec(php bin/webhook-worker.php … &)`) | host com CLI e `exec` — é o realista, com delay de verdade |
+| `shutdown` | a própria request, depois do `finish_request` | fallback; bloqueia a resposta em SAPI sem `finish_request` |
+| `sync` | a própria request, na hora | **teste**: entrega e devolve o desfecho |
+
+### Disparar e saber o que aconteceu
+
+`POST /cslabs/webhook/dispatch` é **síncrono por padrão** e responde o desfecho real:
+
+```bash
+curl -sX POST 'https://cslabs.mfwks.com/celcoin/cslabs/webhook/dispatch' \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"entity":"charge-in","body":{"transactionId":"…","valorPago":25}}'
+```
+
+```json
+"delivery": { "mode": "sync", "outcome": "delivered", "responseCode": 200, "error": null }
+```
+
+**Destino que recusa vira HTTP 502**, não 200 — quem testa por curl vê a falha sem ler o
+corpo. `{"async": true}` volta ao caminho agendado, para exercitar o realista; nesse caso
+a resposta **diz que não sabe** o desfecho, em vez de sugerir sucesso.
+
+### Drenar o que ficou agendado
+
+O fluxo realista (`charge-create`, o gatilho `/pagar` do §5) agenda com delay. Num host
+onde o background não roda, isso fica parado para sempre. O flush entrega na hora e
+reporta cada um:
+
+```bash
+curl -sX POST '…/cslabs/webhook/flush' -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"entity":"charge-in"}'
+```
+
+⚠️ **Use o mesmo bearer do dono da entidade.** A fila é escopada por `client_id`, e o
+despacho de um `/pagar` pertence ao **app** que emitiu a cobrança, não a quem clicou em
+pagar (§5). Bearer errado drena a fila do anônimo e volta vazia. Há `{"clientId": "…"}`
+para forçar o escopo.
+
+**Ninguém entrega duas vezes.** Worker e flush disputam o mesmo despacho; quem chega
+primeiro na hora de mandar passa a linha de `scheduled` para `delivering`, e o outro
+desiste. Sem isso o app receberia o mesmo evento duas vezes — e a idempotência dele
+esconderia o defeito.
+
+### Diagnosticar o host, em vez de adivinhar
+
+Por que o background não roda é **config de PHP do servidor**, e isso não se mede de
+fora. `GET /cslabs/webhook/diagnostico` responde do próprio host:
+
+```bash
+curl -s '…/cslabs/webhook/diagnostico' | php -r '…'
+```
+
+Reporta o SAPI web, o candidato a binário de CLI **executado de verdade** (para ver se
+ele é mesmo CLI), `disable_functions`, `fastcgi_finish_request` **e**
+`litespeed_finish_request`, a pasta de dispatches, e a lista de `impedimentos` do worker
+— vazia significa que ele deveria funcionar.
+
+A suspeita mais concreta está fechada no código: sob mod_php/FPM, `PHP_BINARY` é o
+binário do **servidor**, não o CLI. Mandar um script para ele não executa nada, e como o
+spawn é `exec(… &)` ninguém fica sabendo — o `exec` volta sem erro e o webhook não sai.
+Agora o binário é procurado (`PHP_BINDIR`, `/usr/bin/php`, layout cPanel) e, se nenhum
+serve, o modo cai para `shutdown` **com o motivo registrado no despacho**.
+
+### Inscrição com URL quebrada não passa mais calada
+
+A inscrição de `charge-create` do cslabs estava em
+`https://.e-bancos.com.br/…?r=r=boleto/…` — host com rótulo vazio (não resolve em DNS) e
+parâmetro dobrado. Agora a inscrição **recusa (422) dizendo qual é o defeito** quando a
+URL é inentregável, e **avisa** (`urlWarnings` na resposta) quando ela entrega mas cheira
+a copia-e-cola. O `filter_var(FILTER_VALIDATE_URL)` continua ali como rede: ele recusa,
+mas calado — e o veredito dele varia com a versão do PHP.
+
+Guardado por `tests/webhook_entrega_smoke.php`.
+
+## 7. Internals
 
 - Catálogo de centavos → cenário: `Cslabs::SCENARIO_BY_CENTS`
 - Resolução: `Cslabs::scenarioFromAmount(mixed $amount, string $default = 'success')`

@@ -15,9 +15,14 @@ O microframework não restringe método HTTP no roteador; o método aceito é de
 | `/pages`, `/400`..`/504`, `/maintenance`, `/status`, `/status-fake` | `pages/*` | Páginas de erro e status. |
 | `/pixqrcode/novo`, `/pixqrcode/v2/{id}/{ver,imagem,pagar}` | `api/pix-location-*` | Ferramentas de teste do QR: gerar, ver, imagem e **liquidar** (emite `pix-payment-in`). |
 | `/baas/v2/charge/{txid}/pagar` | `api/charge-pagar`         | Liquida a cobrança e emite `charge-in`. Aceita txid, externalId, linha digitável ou código de barras. |
+| `/cslabs/webhook/dispatch`     | `api/webhook-dispatch`      | Dispara um webhook. **Síncrono por padrão**: entrega e devolve o desfecho (502 se o destino recusar). `{"async":true}` agenda. |
+| `/cslabs/webhook/flush`        | `api/webhook-flush`         | Drena os webhooks agendados, entregando na hora. Escopado por `client_id` — use o bearer do **dono**. |
+| `/cslabs/webhook/diagnostico`  | `api/webhook-diagnostico`   | Como este host entrega webhook: binário de CLI, `disable_functions`, `finish_request`, impedimentos do worker. |
 
-⚠️ As duas últimas linhas **não existem na Celcoin** — são os gatilhos que substituem quem
-paga (o pagador do Pix, o sacado do boleto), que no mock não existe. Ver `docs/scenarios.md` §5.
+⚠️ As linhas de gatilho e as três de webhook **não existem na Celcoin**. Os gatilhos
+substituem quem paga (o pagador do Pix, o sacado do boleto), que no mock não existe; as de
+webhook existem porque **agendar não é entregar** — em host onde background não roda, o
+agendado nunca sai. Ver `docs/scenarios.md` §5 e §6.
 
 ## Rotas Celcoin
 

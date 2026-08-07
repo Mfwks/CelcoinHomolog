@@ -31,6 +31,8 @@ $web->add('/baas-webhookmanager/v1/webhook/subscription','api/webhook-subscripti
 $web->add('/baas-webhookmanager/v1/webhook/subscription/entity','api/webhook-subscription');
 $web->add('/baas-webhookmanager/v1/webhook/subscription/{entity}','api/webhook-subscription');
 $web->add('/cslabs/webhook/dispatch','api/webhook-dispatch');
+$web->add('/cslabs/webhook/flush','api/webhook-flush');
+$web->add('/cslabs/webhook/diagnostico','api/webhook-diagnostico');
 
 # Pix reverse
 $web->add('/baas-wallet-transactions-webservice/v1/pix/reverse','api/pix-reverse-baas');

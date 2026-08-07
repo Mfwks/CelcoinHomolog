@@ -98,6 +98,13 @@ if ($entity === '') {
     return;
 }
 
+# Antes do FILTER_VALIDATE_URL de propósito: os dois recusam, mas só este diz o quê.
+$erros = Cslabs::webhookUrlErrors($url);
+if ($erros !== []) {
+    webhookError(422, 'CSLAB422', 'URL de webhook inentregável: ' . implode(' ', $erros));
+    return;
+}
+
 if ($url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
     webhookError(422, 'CSLAB422', 'Informe uma URL de webhook válida.');
     return;
@@ -115,6 +122,7 @@ echo json_encode([
         'auth' => $record['auth'],
         'active' => $record['active'],
         'knownEntity' => $record['known_entity'],
+        'urlWarnings' => $record['url_warnings'],
         'createDate' => $record['created_at'],
         'lastUpdateDate' => $record['updated_at'],
     ],
