@@ -338,6 +338,10 @@ primeiro na hora de mandar passa a linha de `scheduled` para `delivering`, e o o
 desiste. Sem isso o app receberia o mesmo evento duas vezes — e a idempotência dele
 esconderia o defeito.
 
+⚠️ **A fila guarda o atraso.** Tudo que ficou `scheduled` desde antes de 07/08/2026 —
+quando nada era entregue — continua lá. O **primeiro** flush num escopo entrega esse
+backlog inteiro; estreite com `{"entity": "…"}` se isso não for o que se quer.
+
 ### Diagnosticar o host, em vez de adivinhar
 
 Por que o background não roda é **config de PHP do servidor**, e isso não se mede de
@@ -352,11 +356,16 @@ ele é mesmo CLI), `disable_functions`, `fastcgi_finish_request` **e**
 `litespeed_finish_request`, a pasta de dispatches, e a lista de `impedimentos` do worker
 — vazia significa que ele deveria funcionar.
 
-A suspeita mais concreta está fechada no código: sob mod_php/FPM, `PHP_BINARY` é o
-binário do **servidor**, não o CLI. Mandar um script para ele não executa nada, e como o
-spawn é `exec(… &)` ninguém fica sabendo — o `exec` volta sem erro e o webhook não sai.
-Agora o binário é procurado (`PHP_BINDIR`, `/usr/bin/php`, layout cPanel) e, se nenhum
-serve, o modo cai para `shutdown` **com o motivo registrado no despacho**.
+**Foi assim que a causa saiu de suspeita para medição.** No cslabs o `sapi_web` é
+`litespeed` e o `PHP_BINARY` — que o spawn usava — é `/opt/alt/php83/usr/bin/lsphp`, o
+binário da SAPI do LiteSpeed. O `bin/webhook-worker.php` abre com
+`if (PHP_SAPI !== 'cli') exit('worker only')`: o worker morria na primeira linha, com
+stderr em `/dev/null`. A lápide fica em disco — o worker sai **antes** do `unlink`, então
+cada envelope não consumido em `app/tmp/cslabs/dispatches` é um webhook que não saiu (o
+diagnóstico conta quantos). `disable_functions` está vazio: `exec` nunca foi o problema.
+
+Agora o binário é procurado (`PHP_BINDIR`, `/usr/bin/php`, layout cPanel) e conferido; se
+nenhum serve, o modo cai para `shutdown` **com o motivo registrado no despacho**.
 
 ### Inscrição com URL quebrada não passa mais calada
 
