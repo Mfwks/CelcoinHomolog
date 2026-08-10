@@ -259,6 +259,71 @@ curl -X POST 'https://cslabs.mfwks.com/celcoin/baas/v2/charge/<txid>/pagar'
 app sai cedo quando o boleto já está PAGO, então uma duplicata passaria batida lá e
 mascararia um defeito de idempotência do consumidor. Cobrança cancelada devolve 409.
 
+### Devolução Pix recebida (`pix-reversal-in`) não tem gatilho — e não é esquecimento
+
+Perguntado pela sessão A em 10/08/2026, quando o LGR-004 passou a tratar a devolução
+recebida: **o mock não emite `pix-reversal-in`, e não vai emitir.** Os dois gatilhos da
+tabela acima existem porque o evento correspondente é *provocável* — alguém paga. Uma
+devolução RECEBIDA não é: quem a inicia é a contraparte, e **nem a Celcoin real tem
+endpoint nosso que a cause** — o `POST /baas/v2/pix/reverse` produz o `pix-reversal-out`.
+Inventar um `/pagar` para ela seria inventar uma operação que não existe do outro lado.
+
+O caminho legítimo, aqui e lá, é o evento **chegar de fora**. No mock isso é o dispatch:
+
+```bash
+# Sem "body": sai o template inteiro, com a conta de exemplo do mock.
+curl -X POST 'https://cslabs.mfwks.com/celcoin/cslabs/webhook/dispatch' \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"entity":"pix-reversal-in","status":"CONFIRMED"}'
+```
+
+⚠️ **`body` SUBSTITUI o template inteiro — não mescla.** Para apontar outra conta, mande
+o payload completo, e em especial **não esqueça o `returnIdentification`**: sem ele o
+consumidor não tem chave de idempotência e descarta o evento em silêncio, que é
+exatamente o modo de falha que se está tentando reproduzir.
+
+```bash
+curl -X POST 'https://cslabs.mfwks.com/celcoin/cslabs/webhook/dispatch' \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"entity":"pix-reversal-in","status":"CONFIRMED","body":{
+        "id":"aaaaaaaa-0000-4000-8000-000000000001",
+        "returnIdentification":"D13935893202608101200teste000001",
+        "originalId":"bbbbbbbb-0000-4000-8000-000000000002",
+        "originalClientCode":"0030172",
+        "originalEndToEndId":"E13935893202608101159teste000001",
+        "originalEntoEndId":"E13935893202608101159teste000001",
+        "reason":"MD06","amount":23000.00,
+        "debitParty":{"taxId":"62519201000157","accountType":"TRAN","name":"EMPRESA DEBITO","branch":"0001","account":"447959768","bank":"13935893"},
+        "creditParty":{"taxId":"49966300000119","accountType":"TRAN","name":"EMPRESA HOMOLOG","branch":"0001","account":"<account_number da conta que recebe de volta>","bank":"13935893"},
+        "oldBalance":95.50}}'
+```
+
+O que o template dá de graça (medido no corpus de logs reais, 13/05/2026) é justamente
+o que decide o teste:
+
+- a chave da devolução vem em **`returnIdentification`**, e **não existe `endToEndId`**
+  neste payload. Consumidor que lê `body.endToEndId` acha `null` e descarta o evento —
+  foi o que prendeu R$23.000 no evento #5353. O template **não** manda o campo de
+  presente: mandá-lo faria o mock aprovar um consumidor que a Celcoin real reprova;
+- vem o **typo da Celcoin**: `originalEndToEndId` **e** `originalEntoEndId`, os dois,
+  com o mesmo valor;
+- só `oldBalance`, sem `currentBalance` (o `-out` tem os dois);
+- a conta nossa é a do **`creditParty`** (o dinheiro volta). No `-out` é a do
+  **`debitParty`** — os dois lados **não** são espelho um do outro.
+
+⚠️ **Não é gêmeo do `-out`.** O `-out` usa `originalPaymentId` (igual ao `id`) e
+`clientCode`; o `-in` usa `originalId`/`originalClientCode`. Trocar um pelo outro num
+teste dá verde no mock e vermelho em produção.
+
+⚠️ **Colisão de chave, medida — n=1.** No único par real do corpus (13/05 16:31, on-us),
+o `-in` e o `-out` da mesma devolução vieram com o **mesmo `returnIdentification`** e o
+mesmo `originalEndToEndId`, diferindo só no `body.id`. Quem usa `returnIdentification`
+como chave de idempotência precisa escopá-la por conta e por tipo, senão a segunda perna
+é descartada como duplicata. Dá para reproduzir de propósito: disparar as duas entities
+sobrescrevendo o mesmo `returnIdentification`.
+
+Guardado por `tests/pix_reversal_smoke.php` (28 asserções, incluindo as negativas).
+
 ### O escopo do dono vale para a inscrição, não só para a gravação
 
 Quem emite é o app, com bearer; quem dispara a liquidação é um curl ou o navegador, sem

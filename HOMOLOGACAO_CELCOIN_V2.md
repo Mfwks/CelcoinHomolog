@@ -412,7 +412,9 @@ Endpoint receptor: `controllers/webhook/CelcoinController::actionHandle`. Compor
 ### 9.1 Entities roteadas (mapa `$entityHandlers`)
 `onboarding-create`, `kyc`, `onboarding-backgroundcheck`, `onboarding-documentscopy`, `onboarding-file`, `onboarding-proposal`, `account-status`, `pix-payment-out`, `pix-payment-in`, `pix-dict-claim-{open,waiting,confirmed,cancelled,completed}`, `internal-transfer-{out,in}`, `spb-transfer-{out,in}`, `spb-reversal-in`, `billpayment`, `billpayment-occurrence`, `charge-create`, `charge-canceled`, `charge-in`, `topup`.
 
-> `pix-dict-claim-*`, `internal-transfer-*` e `topup` são apenas logados (sem persistência). `pix-reversal-out`/`pix-reversal-in` aparecem em `tipos()` (assináveis) mas **não têm handler** — não emitir esperando efeito.
+> `pix-dict-claim-*`, `internal-transfer-*` e `topup` são apenas logados (sem persistência).
+>
+> ⚠️ **Desatualizado em 10/08/2026 quanto à devolução Pix.** Esta nota dizia que `pix-reversal-out`/`pix-reversal-in` eram assináveis mas **sem handler** — verdade até o LGR-004. Conferido hoje na `feat/celcoin-blaster`: `'pix-reversal-in' => 'handlePixReversalIn'` e `'pix-reversal-out' => 'handlePixReversalOut'` estão no mapa, com `PixService::processPixReversalIn/Out`. **Ainda não está na `dev`** — a branch estava 27 commits à frente quando isto foi medido. Campos consumidos em §9.2.
 
 ### 9.2 Bodies por entity (campos consumidos)
 
@@ -421,6 +423,8 @@ Endpoint receptor: `controllers/webhook/CelcoinController::actionHandle`. Compor
 - **`spb-transfer-out`** (`TedService::processTedOut`): `body.originalId`/`body.id` (casa `external_id`), `status`.
 - **`spb-transfer-in`**: `body.id`/`originalId` + payload repassado a `Transferencia::receberTedCelcoin`.
 - **`spb-reversal-in`**: `body.originalId`/`body.id`.
+- **`pix-reversal-in`** (`PixService::processPixReversalIn`, LGR-004): chave de idempotência = `body.returnIdentification` → `body.endToEndId` → `body.id`; `body.amount` (>0, senão descarta); `body.creditParty` resolve a conta que recebe de volta (por `account` → `key` → `taxId`); `body.debitParty` para nome da contraparte. **Nunca `originalEndToEndId`**: ele é o E2E do envio original, e reusá-lo como chave acha a `mov_pix` do envio e conclui "já lançado" para sempre (família do LGR-007). Não cobra tarifa. ⚠️ O payload **não traz `endToEndId`** — é por isso que `celcoin_v2_webhook_events.end_to_end_id` fica NULL nesses eventos.
+- **`pix-reversal-out`** (`processPixReversalOut`): simétrico, mas a conta nossa é a do `body.debitParty`, e a resolução é **estrita** (não resolveu → nada é debitado, evento fica pendente). Usa `originalPaymentId`/`clientCode`, tem `currentBalance`+`oldBalance` e `additionalInformation`; **não** repete o typo `originalEntoEndId`.
 - **`onboarding-create` / `-backgroundcheck` / `-documentscopy` / `-proposal`**: `status`, `body.proposalId`, `body.onboardingId`, `body.clientCode`, `body.account.account`/`body.account` (escalar), `body.account.branch`/`body.branch`, `body.urlDocumentscopy`, `body.RejectedReason` (array, em REPROVED/REJECTED).
 - **`onboarding-file`**: `body.proposalId`, `body.files[]` = `{ type, url }`. `type` ∈ `CNH_FRONT/RG_FRONT/RNE_FRONT/CNH_BACK/RG_BACK/RNE_BACK/SELFIE` (PF) + `CONTRATO_SOCIAL/PROCURACAO_PODERES` (PJ). O consumidor baixa a `url`.
 - **`kyc`**: `status` (→ `kyc_status`), `body.onboardingId`/`clientCode`/`proposalId`.

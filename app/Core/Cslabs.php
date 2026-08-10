@@ -433,6 +433,14 @@ class Cslabs
      * metade das chamadas quebra a linha depois do parêntese):
      *
      *   grep -rhA1 "scheduleWebhook(" app --include=*.php | grep -o "'[a-z-]\+'"
+     *
+     * ⚠️ A conferência acima é condição SUFICIENTE, não necessária: metade desta
+     * lista são entidades de ENTRADA (`pix-payment-in`, `spb-transfer-in`,
+     * `spb-reversal-in`, `judicial-movement-in`, `pix-dict-claim-*`) que nenhum
+     * stream emite nem poderia — na Celcoin real quem as causa é a contraparte,
+     * não uma API nossa. Para essas, "sabe emitir" quer dizer: tem template real
+     * em `sampleWebhookBody()` e sai por `POST /cslabs/webhook/dispatch`. É por
+     * isso que `pix-reversal-in` entrou em 10/08/2026 sem nenhum caller novo.
      */
     public static function knownWebhookEntities(): array
     {
@@ -456,6 +464,7 @@ class Cslabs
             'account-status',
             'onboarding-proposal',
             'pix-reversal-out',
+            'pix-reversal-in',
             'billpayment',
             'billpayment-occurrence',
             'judicial-movement-in',
@@ -3163,6 +3172,56 @@ class Cslabs
                 'numCtrlSTR' => null,
                 'currentBalance' => null,
                 'oldBalance' => null,
+            ],
+            /*
+             * Devolução Pix — os dois lados, medidos no corpus de logs reais
+             * (`mocks-v2`, tenants confiapay/homologacao3, 13/05/2026). NÃO são
+             * simétricos, e a diferença é justamente o que quebra consumidor:
+             *
+             *   -in  usa `originalId`/`originalClientCode`, só tem `oldBalance`,
+             *        e manda a chave em `returnIdentification` — **não existe
+             *        `endToEndId` neste payload**. Vem com o typo da Celcoin:
+             *        `originalEndToEndId` E `originalEntoEndId`, os dois, mesmo valor.
+             *   -out usa `originalPaymentId` (== `id`), tem old+currentBalance e
+             *        `additionalInformation`, e NÃO repete o typo.
+             *
+             * O `endToEndId` ausente no -in é o que travou R$23k no LGR-004: o
+             * consumidor lia `body.endToEndId`, achava null, e o evento morria. Por
+             * isso este template não o inclui "por conveniência" — incluí-lo faria
+             * o mock aprovar um consumidor que a Celcoin real reprova.
+             *
+             * Sentido do dinheiro: no -in a conta nossa é a do `creditParty` (o
+             * dinheiro volta); no -out é a do `debitParty` (devolvemos o que
+             * recebemos). Sobrescreva `body` no dispatch para apontar outra conta.
+             */
+            'pix-reversal-in' => [
+                'id' => $id,
+                'returnIdentification' => 'D13935893' . date('YmdHi') . substr(hash('sha256', $id), 0, 11),
+                'originalId' => gerarHashMock(),
+                'originalClientCode' => str_pad((string) random_int(1, 9999999), 7, '0', STR_PAD_LEFT),
+                'originalEndToEndId' => $endToEnd,
+                // Não é engano de digitação nosso: a Celcoin manda os dois campos.
+                'originalEntoEndId' => $endToEnd,
+                'reason' => 'MD06',
+                'amount' => 1.00,
+                'debitParty' => ['taxId' => '62519201000157', 'accountType' => 'TRAN', 'name' => 'EMPRESA DEBITO', 'branch' => '0001', 'account' => '447959768', 'bank' => '13935893'],
+                'creditParty' => ['taxId' => '49966300000119', 'accountType' => 'TRAN', 'name' => 'EMPRESA HOMOLOG', 'branch' => '0001', 'account' => '300541554121', 'bank' => '13935893'],
+                'oldBalance' => 95.50,
+            ],
+            'pix-reversal-out' => [
+                'id' => $id,
+                'amount' => 1.00,
+                'clientCode' => gerarHashMock(),
+                // Igual ao `id` nos dois eventos reais do corpus — replicado de propósito.
+                'originalPaymentId' => $id,
+                'originalEndToEndId' => $endToEnd,
+                'returnIdentification' => 'D13935893' . date('YmdHi') . substr(hash('sha256', $id), 0, 11),
+                'reason' => 'MD06',
+                'additionalInformation' => '',
+                'debitParty' => ['taxId' => '49966300000119', 'accountType' => 'TRAN', 'name' => 'EMPRESA HOMOLOG', 'branch' => '0001', 'account' => '300541554121', 'bank' => '13935893'],
+                'creditParty' => ['taxId' => '62519201000157', 'accountType' => 'TRAN', 'name' => 'EMPRESA DEBITO', 'branch' => '0001', 'account' => '447959768', 'bank' => '13935893'],
+                'currentBalance' => 53.50,
+                'oldBalance' => 54.50,
             ],
             /*
              * charge-in tem shape PRÓPRIO, não é o do charge-create com outro status.
