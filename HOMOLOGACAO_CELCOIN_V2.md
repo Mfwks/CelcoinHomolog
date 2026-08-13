@@ -334,9 +334,13 @@ Consome (enriquecimento): `boleto.bankLine`, `boleto.bankAgency`, `boleto.bankAc
 ### 6.5 Pagamento de conta (billpayment)
 - Autorizar (CIP): `POST {base}/v5/transactions/billpayments/authorize` — **já coberto**
   ```json
-  { "barCode": { "type": 1, "digitable": "<linha_digitavel>" } }   // type: NPC→1, TAXES→2
+  { "barCode": { "type": 1, "digitable": "<linha_digitavel_47>" } }
   ```
   Consome: `assignor` (ou `body.assignor`) para saber que achou; senão `body.message`/`message`. O corpo real (valores, `registerData`, `transactionId`) é repassado adiante.
+
+  ⚠️ **`digitable` tem que ser a linha digitável de 47 dígitos.** Mandar o código de barras de 44 devolve **HTTP 400 / `errorCode 822`** — foi o que derrubou o pagamento de boleto da confiapay em 13/08/2026, quando o IB enviou só o `codigo_de_barras`. A Celcoin valida os DVs, não o comprimento: linha de 47 com DV errado também leva 822. Reproduzido no mock desde 13/08 — ver `docs/scenarios.md` §7.
+
+  ⚠️ **A anotação `type: NPC→1, TAXES→2` que estava aqui não bate com o tráfego** (corrigido em 13/08/2026): o app manda `type: 1` em **100% dos 84 requests** medidos, inclusive nos boletos de cobrança que a Celcoin respondeu com `registerData` completo. O `type` não distingue arrecadação de cobrança — quem distingue é o prefixo `8` da linha de convênio. Um `type` fora da faixa (`"NPC"` como string, 4× em homologacao3) nem chega ao negócio: volta o erro de model-binding do .NET, `{"errors":{"barCode.type":[...]}}`.
 - Pagar: `POST {base}/baas/v2/billpayment` — **já coberto**
   ```json
   { "clientRequestId":"<pagamento_id>","amount":1763.66,"account":"443168489",

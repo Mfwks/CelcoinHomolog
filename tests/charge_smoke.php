@@ -147,15 +147,23 @@ $auth2 = Cslabs::billPaymentAuthorizeResponse([
 ]);
 expect($auth2['transactionId'] === $txid, 'authorize por bankLine só-dígitos bate');
 
-# 7) Billpayment authorize com barCode 44 dígitos também bate
+# 7) Billpayment authorize com barCode 44 dígitos é RECUSADO com 822
+# Invertido em 13/08/2026. Antes esta linha afirmava que o 44 "também encontra" —
+# era a leniência que fazia a homologação dar verde no incidente da confiapay, onde
+# o IB mandou o código de barras e a Celcoin real devolveu HTTP 400 / 822. O 44 é
+# recusado mesmo sendo o barcode do NOSSO próprio boleto: neste endpoint a Celcoin
+# quer a linha digitável, e o mock só vale enquanto for fiel a isso.
 $auth3 = Cslabs::billPaymentAuthorizeResponse([
     'barCode' => ['digitable' => $barCode, 'type' => 2],
 ]);
-expect($auth3['transactionId'] === $txid, 'authorize por barCode 44d também encontra');
+expect(($auth3['errorCode'] ?? null) === '822', 'authorize por barCode 44d é recusado com 822, como na Celcoin real');
+expect(!isset($auth3['transactionId']), 'recusa 822 não devolve transactionId');
 
 # 8) Billpayment authorize com linha desconhecida (boleto de terceiro) usa fallback sintético
+# A linha é a do BANCO PACTUAL medida em produção (`mocks-v2`), que a Celcoin aceitou
+# com errorCode 000 — precisa ser uma linha VÁLIDA, senão o que se testa aqui vira o 822.
 $auth4 = Cslabs::billPaymentAuthorizeResponse([
-    'barCode' => ['digitable' => '03399999999999999999999999999999999999999999999', 'type' => 2],
+    'barCode' => ['digitable' => '20890050091000000274083050530506314930000143106', 'type' => 2],
 ]);
 expect($auth4['transactionId'] !== $txid, 'boleto desconhecido NÃO devolve nosso txid');
 expect(isset($auth4['transactionId']) && $auth4['transactionId'] > 0, 'boleto desconhecido devolve txid sintético');

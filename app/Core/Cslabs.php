@@ -679,14 +679,23 @@ class Cslabs
      */
     private static string $lastErrorScenario = 'success';
 
+    /** Motivo da última recusa 822 — só para log e teste; a resposta não o expõe. */
+    private static string $lastDigitableRejection = '';
+
     public static function lastErrorScenario(): string
     {
         return self::$lastErrorScenario;
     }
 
+    public static function lastDigitableRejection(): string
+    {
+        return self::$lastDigitableRejection;
+    }
+
     public static function resetLastErrorScenario(): void
     {
         self::$lastErrorScenario = 'success';
+        self::$lastDigitableRejection = '';
     }
 
     /*
@@ -722,6 +731,8 @@ class Cslabs
             'error'              => 500,
             'not_found'          => 404,
             'failed'             => 400,
+            // 822 do billpayment/authorize — HTTP 400 medido no corpus.
+            'invalid_digitable'  => 400,
             // Só o spb/transfer implementa o modo; nos demais streams o slug cai no
             // ramo de erro e 501 diz exatamente isso, em vez de um 400 mudo.
             'accept_then_timeout' => 501,
@@ -934,13 +945,27 @@ class Cslabs
 
         $digits = preg_replace('/\D+/', '', $digitable) ?: $digitable;
 
+        # A Celcoin recusa, com HTTP 400 / 822, tudo que não seja linha digitável
+        # de cobrança bem-formada — inclusive código de barras de 44 com DV geral
+        # CORRETO. Medido em 9 recusas e 54 sucessos do corpus; ver App\Core\Boleto.
+        $diagnostico = Boleto::validarCobranca($digitable);
+
+        if (!$diagnostico['valida'] && !self::isOwnLegacyBankLine($digits)) {
+            return self::billPaymentDigitableError($diagnostico['motivo']);
+        }
+
         $ownCharge = self::chargeRecordByDigits($digits);
         if (is_array($ownCharge)) {
             return self::billPaymentAuthorizeFromCharge($ownCharge, $digitable, $type);
         }
 
         $seed = hash('sha256', $digits);
-        $isUtilityBill = str_starts_with($digits, '8') || $type === 1;
+        # `type` NÃO distingue arrecadação: o app manda `type: 1` em 100% do
+        # tráfego medido (84 requests), inclusive nos boletos de cobrança que a
+        # Celcoin respondeu com `registerData` completo. Quem distingue é o
+        # prefixo 8 da linha de convênio. O `|| $type === 1` que estava aqui
+        # fazia o mock devolver `registerData: null` para boleto de cobrança.
+        $isUtilityBill = str_starts_with($digits, '8');
         $value = self::billPaymentValue($digits, $seed);
         $dueIso = self::billPaymentDueIso($digits, $seed);
         $settleDate = date('d/m/Y', strtotime('+1 weekday'));
@@ -2497,22 +2522,16 @@ class Cslabs
 
     public static function boletoBankLine(string $transactionId, float $amount, string $dueDate): string
     {
-        $seed = hash('sha256', $transactionId . '|' . $amount . '|' . $dueDate);
-        $digits = '';
-
-        for ($i = 0, $len = strlen($seed); $i < $len && strlen($digits) < 47; $i++) {
-            $char = $seed[$i];
-            if (ctype_digit($char)) {
-                $digits .= $char;
-            } else {
-                $digits .= (string) (ord($char) % 10);
-            }
-        }
-
         # Celcoin emite a linha digitável com 47 dígitos puros (sem máscara) no
         # webhook e no GET fetch — a máscara fica por conta da renderização do
         # boleto, não do payload. Ref.: developers.celcoin.com.br/docs/criar-uma-cobranca-avulsa.
-        return str_pad($digits, 47, '0');
+        #
+        # Até 13/08/2026 isto eram 47 dígitos tirados de um `sha256`: tinham o
+        # comprimento certo e DVs aleatórios. Passava no teste ("47 dígitos") e
+        # não passaria em banco nenhum. Como o `authorize` agora recusa linha
+        # inválida com 822 — que é o que a Celcoin real faz —, o emissor tinha
+        # que virar fiel junto, senão o mock recusaria o próprio boleto.
+        return Boleto::emitirLinha($transactionId . '|' . $amount . '|' . $dueDate, $amount, $dueDate);
     }
 
     public static function chargeRecordByDigits(string $digits): ?array
@@ -2587,14 +2606,11 @@ class Cslabs
 
     public static function boletoBarCode(string $transactionId, float $amount, string $dueDate): string
     {
-        $seed = hash('sha256', $transactionId . '|' . $amount . '|' . $dueDate . '|barcode');
-        $digits = '';
-        $len = strlen($seed);
-        for ($i = 0; $i < $len && strlen($digits) < 44; $i++) {
-            $char = $seed[$i];
-            $digits .= ctype_digit($char) ? $char : (string) (ord($char) % 10);
-        }
-        return $digits;
+        # O código de barras não é um segundo número sorteado: é a MESMA linha
+        # digitável reordenada. Antes de 13/08/2026 os dois saíam de sementes
+        # diferentes, então o `barCode` e o `bankLine` da mesma cobrança não
+        # tinham relação nenhuma — algo que nenhum leitor de boleto aceitaria.
+        return Boleto::barcodeDeLinha(self::boletoBankLine($transactionId, $amount, $dueDate));
     }
 
     public static function boletoBankLineDigits(string $bankLine): string
@@ -3968,6 +3984,53 @@ class Cslabs
             ],
             'version' => '1.0.0',
         ];
+    }
+
+    /**
+     * O 822 do `billpayment/authorize` — recusa de linha digitável.
+     *
+     * Não usa o envelope de {@see billPaymentError()} de propósito: a Celcoin
+     * devolve este erro **plano**, medido tal e qual no corpus —
+     * `{"errorCode":"822","message":"…"}` com HTTP 400, sem `status` nem
+     * `version`. Enveloparia funcionaria (o `CelcoinV2HttpClient` do app lê as
+     * duas formas), mas o mock estaria ensinando um shape que a Celcoin não usa.
+     *
+     * ⚠️ A **mensagem varia**: o corpus tem `"Erro na conversão de linha
+     * digitável para código de barras"` (7 vezes, homologacao3) e `"Erro na
+     * conversao de Linha Digitavel para Codigo de Barras"` (2 vezes, confiapay —
+     * inclusive o incidente de 13/08). Não é o log comendo acento: os dois
+     * arquivos têm acento UTF-8 em milhares de outras linhas. Quem consome tem
+     * que casar pelo **código 822**, nunca pela string. Aqui sai a variante do
+     * incidente mais recente, que é a que a produção está vendo hoje.
+     */
+    private static function billPaymentDigitableError(string $motivo): array
+    {
+        self::$lastErrorScenario = 'invalid_digitable';
+        self::$lastDigitableRejection = $motivo;
+
+        return [
+            'errorCode' => '822',
+            'message' => 'Erro na conversao de Linha Digitavel para Codigo de Barras',
+        ];
+    }
+
+    /**
+     * Linha inválida que o PRÓPRIO mock emitiu antes de 13/08/2026.
+     *
+     * Só existe para não inutilizar cobranças já gravadas no SQLite de
+     * homologação quando o emissor passou a gerar DVs de verdade — uma bateria
+     * de QA em curso não pode morrer por causa do deploy. Deliberadamente
+     * restrito a 47 dígitos e ao alias `charges_by_bank_line`: código de barras
+     * de 44 **não** entra por aqui, senão a leniência que o 822 veio matar
+     * voltava pela porta dos fundos.
+     */
+    private static function isOwnLegacyBankLine(string $digits): bool
+    {
+        if (strlen($digits) !== 47) {
+            return false;
+        }
+
+        return is_array(self::readEntity('charges_by_bank_line', $digits));
     }
 
     private static function billPaymentError(string $scenario): array

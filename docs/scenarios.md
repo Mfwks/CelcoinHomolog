@@ -443,7 +443,115 @@ mas calado — e o veredito dele varia com a versão do PHP.
 
 Guardado por `tests/webhook_entrega_smoke.php`.
 
-## 7. Internals
+## 7. Recusas de contrato — o que não depende de cenário nenhum
+
+Tudo acima é **cenário**: o cliente pede o erro (por centavo mágico, por slug, pelo
+nome do arquivo) e o mock o entrega. Isso cobre o caminho feliz e os erros que o
+cliente já sabe que existem — e não cobre a classe de defeito mais cara, que é a
+Celcoin **recusar uma entrada que o mock aceitava calado**.
+
+Um mock mantido só por cenário dá **verde em bug que produção reprova**. Ele foi
+escrito para simular o que a Celcoin faz quando dá certo; se não simular também o
+que ela faz quando a entrada está errada, a homologação fica cega justamente onde o
+teste teria valor. **Toda recusa real medida em produção vira validação aqui** — é o
+mesmo laço prod→mock que a sustentação já mantém prod→dev.
+
+### `billpayment/authorize` — erro 822, linha digitável recusada
+
+**A Celcoin quer a linha digitável de 47 dígitos.** Qualquer outra coisa volta como
+`HTTP 400` com o corpo **plano** (sem envelope):
+
+```json
+{"errorCode":"822","message":"Erro na conversao de Linha Digitavel para Codigo de Barras"}
+```
+
+Medido em **9 recusas e 54 sucessos** dos logs reais (`mocks-v2`, confiapay e
+homologacao3, 05–08/2026). A regra separa os dois conjuntos sem exceção:
+
+| enviado em `barCode.digitable` | dígitos | DVs | Celcoin |
+|---|---|---|---|
+| código de barras (44), **mesmo com DV geral correto** | 44 | ok | **822** |
+| linha de 47 com DV de campo errado | 47 | ✗ | **822** |
+| linha de 47 mascarada com `.` e espaço, DVs errados | 47 | ✗ | **822** |
+| lixo (qualquer string curta) | — | — | **822** |
+| linha digitável de 47 com todos os DVs corretos | 47 | ok | `errorCode 000` |
+
+Duas armadilhas que só o corpus revela:
+
+- ⚠️ **Não é "44 recusa, 47 aceita".** Dois dos nove 822 tinham 47 dígitos. A Celcoin
+  valida os **DVs** (mod10 dos três campos + mod11 do DV geral), não o comprimento.
+  Uma implementação que só contasse dígitos aprovaria os dois.
+- ⚠️ **Barcode bem-formado também é recusado.** Quatro dos nove são códigos de barras
+  de 44 com DV geral **correto** — inclusive um boleto Itaú legítimo de R$ 3.255,34.
+  Neste endpoint a Celcoin não converte 44→47; ela quer a linha digitável.
+
+⚠️ **A mensagem varia; o código não.** O corpus tem as duas grafias — `"Erro na
+conversão de linha digitável para código de barras"` (7×) e `"Erro na conversao de
+Linha Digitavel para Codigo de Barras"` (2×) — e não é o log comendo acento, porque
+os dois arquivos têm acento UTF-8 em milhares de outras linhas. **Case pelo `822`,
+nunca pela string.** O mock emite a segunda variante, que é a do incidente mais
+recente.
+
+**O que passa mesmo sem ser linha de cobrança:**
+
+- **Arrecadação/convênio** (48 dígitos começando com `8`) — estrutura própria, e
+  **zero ocorrências no corpus**, nem sucesso nem recusa. Passa, porque inventar
+  recusa sem medida é o inverso do erro que esta seção existe para corrigir. Quando
+  a sustentação medir uma, a validação entra aqui.
+- **Linha inválida que o próprio mock emitiu antes de 13/08/2026**, e só por
+  `charges_by_bank_line`, para não inutilizar cobrança já gravada no SQLite de
+  homologação. Código de barras de 44 **não** entra por essa porta.
+
+```bash
+# recusado (código de barras de 44 — o caso do incidente de 13/08)
+curl -sS -X POST "$BASE/v5/transactions/billpayments/authorize" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"barCode":{"type":1,"digitable":"34196153000003255341090002071957140237236000"}}'
+# → HTTP 400 {"errorCode":"822","message":"Erro na conversao de Linha Digitavel para Codigo de Barras"}
+
+# aceito (a MESMA cobrança, como linha digitável de 47)
+curl -sS -X POST "$BASE/v5/transactions/billpayments/authorize" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"barCode":{"type":1,"digitable":"34191090080207195714202372360004615300000325534"}}'
+# → HTTP 200 errorCode 000
+```
+
+### `barCode.type` não distingue arrecadação — o prefixo `8` distingue
+
+Medido: o app manda **`type: 1` em 100% dos 84 requests** do corpus, inclusive nos
+boletos de cobrança que a Celcoin respondeu com `registerData` completo. Até
+13/08/2026 o mock tratava `type === 1` como conta de consumo e devolvia
+`registerData: null` — errado para o tráfego real. Quem decide é o **prefixo 8** da
+linha de convênio.
+
+Há ainda um `type` fora da faixa: `"NPC"` (string) faz a Celcoin devolver o erro de
+model-binding do .NET, não um erro de negócio —
+`{"errors":{"barCode.type":["Could not convert string to integer: NPC…"]}}`. Medido
+4× em homologacao3; **ainda não reproduzido aqui**.
+
+### A linha digitável emitida pelo mock é válida de verdade
+
+Consequência necessária do acima: se o `authorize` recusa linha inválida, o emissor
+não pode gerar linha inválida — senão o mock recusaria o próprio boleto. Até
+13/08/2026 a `bankLine` eram 47 dígitos tirados de um `sha256`: comprimento certo,
+DVs aleatórios, e o `barCode` saía de uma **semente diferente**, sem relação nenhuma
+com a linha da mesma cobrança.
+
+Agora (`App\Core\Boleto`) a linha codifica **valor e vencimento de verdade** e o
+`barCode` é a mesma linha reordenada — round-trip 47↔44 exato. O fator de vencimento
+usa a base **22/02/2025 = 1000** (o ciclo reiniciou; a base de 1997 esgotou em
+21/02/2025), conferida contra três respostas reais: fator `1493` → 30/06/2026 e a
+Celcoin responde `dueDateRegister: "2026-06-30T00:00:00"`.
+
+Guardado por `tests/billpayment_822_smoke.php` (34 asserções, todas contra payload
+real) e pelos casos 7 e 8 do `tests/charge_smoke.php`. Os três critérios de mutação
+do briefing foram exercitados à mão: aceitar sempre derruba 11 asserções, medir só o
+comprimento derruba as duas linhas de 47 inválidas, converter 44→47 derruba os
+quatro barcodes. ⚠️ Ao repetir isso, **confira que a mutação foi de fato aplicada** —
+uma substituição que não casa no arquivo produz "nenhuma falha", que é
+indistinguível de teste fraco.
+
+## 8. Internals
 
 - Catálogo de centavos → cenário: `Cslabs::SCENARIO_BY_CENTS`
 - Resolução: `Cslabs::scenarioFromAmount(mixed $amount, string $default = 'success')`
@@ -451,6 +559,11 @@ Guardado por `tests/webhook_entrega_smoke.php`.
 - Último cenário disparado nesta request: `Cslabs::lastErrorScenario()`
 - Catálogo de mensagens: maps em `paymentError`, `billPaymentError`, `chargeError`
   (Cslabs.php).
+- Linha digitável e código de barras (validação, conversão, emissão):
+  `App\Core\Boleto` — o docblock traz a tabela dos 9 casos medidos.
+- Recusa 822: `Cslabs::billPaymentDigitableError()`; motivo da última recusa em
+  `Cslabs::lastDigitableRejection()` (para log e teste; a resposta não o expõe,
+  porque a Celcoin real também devolve o 822 seco).
 
 Adicionar um novo cenário:
 
@@ -459,3 +572,15 @@ Adicionar um novo cenário:
    conforme onde fizer sentido.
 3. Mapeie HTTP em `scenarioHttpStatus`.
 4. Atualize esta doc.
+
+Adicionar uma **recusa de contrato** (seção 7) é outra coisa, e a diferença importa:
+cenário é o cliente *pedindo* o erro; recusa é o mock **impondo** a validação da
+Celcoin a quem não pediu nada.
+
+1. Parta do payload real da pasta do caso, na sustentação. **Não invente o payload** —
+   o que dá valor à recusa é ela ser idêntica à que produção levou.
+2. Reproduza o corpo **e o envelope** medidos. O 822 é plano; outros erros vêm no
+   `{status, error, version}`. Copiar o envelope errado ensina um shape falso.
+3. Escreva a asserção **negativa** junto: o caso que hoje passa e deveria falhar.
+4. Rode a mutação — reintroduza a leniência e confirme que o teste cai. Se não cair,
+   o teste não guarda nada.
