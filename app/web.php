@@ -85,6 +85,10 @@ $web->add('/v5/transactions/billpayments/authorize','api/billpayment-authorize')
 $web->add('/baas/v2/billpayment','api/billpayment'); // efetuaPagamento :: /baas/v2/billpayment
 $web->add('/baas/v2/billpayment/status','api/billpayment-status'); // confirmarPagamento :: /baas/v2/billpayment/status
 $web->add('/api-integration-baas-webservice/v1/charge','api/charge'); // emissaoBoletoCobranca :: /api-integration-baas-webservice/v1/charge
+// GET e DELETE por externalId — o par que o app usa desde 17/08/2026 e que
+// faltava aqui. 2 segmentos depois do prefixo, então NÃO disputa com a emissão
+// acima: `{externalId}` casa `([^/]+)`, que exige ao menos um caractere.
+$web->add('/api-integration-baas-webservice/v1/charge/{externalId}','api/charge-v1');
 $web->add('/pix/v1/dict/v2/key','api/key-old'); // consultarChaveAntigo :: /pix/v1/dict/v2/key
 // Mesmo stream dos outros dois: é a MESMA operação de Pix out, e este é o path
 // que o fluxo padrão usa (CelcoinPix::pagamentoPix). Enquanto tinha stream

@@ -551,7 +551,116 @@ quatro barcodes. ⚠️ Ao repetir isso, **confira que a mutação foi de fato a
 uma substituição que não casa no arquivo produz "nenhuma falha", que é
 indistinguível de teste fraco.
 
-## 8. Internals
+## 8. Charge V1 por `externalId` — e as duas formas de "não encontrei"
+
+`GET` e `DELETE /api-integration-baas-webservice/v1/charge/{externalId}`, o par que
+o app usa desde 17/08/2026 e que faltava aqui. Quem apontasse uma instância para o
+mock tomava **404 de rota** — que reproduz o mesmo vermelho do sandbox por um motivo
+completamente diferente, e é o pior tipo de falso negativo.
+
+O id do path é o `str_pad($boletoId, 10, '0', STR_PAD_LEFT)` mandado na emissão,
+**não** o `transactionId` (UUID).
+
+### O contrato medido
+
+Homolog `totalis` contra `sandbox.openfinance.celcoin.dev`, 26/08/2026
+(`sustenance/dev/2026/2026-08-26-bol-005-qa-homolog/` e
+`sustenance/totalis/2026/08-26-bol-015-.../repro-homolog/`):
+
+| operação | caso | HTTP | corpo |
+|---|---|---|---|
+| `DELETE` | id inexistente | **400** | `{"version":"1.2.0","status":"ERROR","error":{"errorCode":"CDE001","message":"Não foi encontrado registro para o identificador informado."}}` |
+| `GET` | id inexistente | **404** | `{"statusCode":404,"message":"Resource not found"}` |
+
+⚠️ **As duas formas são diferentes, e a diferença é o achado.** O `DELETE` devolve
+erro de negócio da Celcoin — família CDE, com `version`, passando pelo gateway até a
+aplicação. O `GET` devolve o **404 genérico do gateway**, que é a mesma cara que um
+path inexistente tem. Nenhuma das duas foi uniformizada aqui: o mock devolve cada
+uma como foi medida.
+
+**Consequência prática, ainda não resolvida:** essa assimetria é evidência de que o
+`GET .../v1/charge/{id}` pode **não existir** na Celcoin. Se existisse, o esperado
+seria um CDE001 como no `DELETE` do mesmo prefixo. A consulta documentada da família
+é a V2 por query string (`GET /baas/v2/charge?ExternalId=`), que é a que o corpus
+mostra em uso. **Enquanto isso não for medido contra um id que exista de verdade no
+provedor, uma bateria verde contra este mock não prova que o endpoint responde em
+produção** — prova só que o app sabe consumir a resposta caso responda.
+
+### O sucesso é inferido, e da família certa
+
+Nenhum sucesso foi observado (o sandbox nunca tinha a cobrança viva). O que sai aqui
+segue o envelope da família charge, esse sim medido: `POST /v1/charge` responde
+`{"version":"1.1.0","status":"SUCCESS","body":{"transactionId":…}}` (corpus,
+confiapay 02/07) e o `GET` V2 responde o mesmo envelope com `body.boleto.bankLine`.
+
+```json
+{"version":"1.1.0","status":"SUCCESS","body":{"transactionId":"…","externalId":"0000010474",
+ "amount":805.66,"status":"PENDING","boleto":{"bankLine":"…47 dígitos…","barCode":"…"},"…":"…"}}
+```
+
+⚠️ **Não achate esse envelope.** `BoletoCelcoin::buscarEPopularLinhaDigitavel` lê
+`$chargeDetails->boleto->bankLine`, mas `$chargeDetails` é o corpo inteiro da
+resposta — a leitura certa é `->body->boleto->bankLine`, como o próprio
+`BoletoCelcoin.php:79` faz com `->body->transactionId` na emissão. Mover `boleto`
+para o topo faria o app parar de ver `null` **na homologação e só nela**. É a
+inversão exata do que a seção 7 existe para evitar. Duas asserções do
+`tests/charge_v1_smoke.php` defendem isso.
+
+O `DELETE` de cobrança viva devolve `PROCESSING` e a cobrança inteira, como a V2 — o
+`CANCELED` chega pelo webhook `charge-canceled`, que agora traz também o `externalId`
+(93 amostras reais em `mocks-v2/webhooks-raw.log` trazem).
+
+### Cenário deliberado
+
+Sem semear nada, o índice decide: cobrança existe → sucesso; não existe → o erro da
+tabela acima. Para o teste negativo com cobrança **viva** — "a política recusa este
+cancelamento" — vale a convenção de palavra-chave do `scenarioFromValue` no próprio
+`externalId`:
+
+```bash
+# recusa por política (cobrança existe, cancelamento negado)
+curl -X DELETE "$BASE/api-integration-baas-webservice/v1/charge/qa-teste-blocked-1"
+# → HTTP 403 {"status":"ERROR","error":{"errorCode":"CSLAB423",…},"version":"1.2.0"}
+```
+
+⚠️ **Palavra-chave, não hífen.** `qa-teste-comum-1` não vira cenário nenhum.
+
+### A armadilha que isto desenterrou
+
+Cobrir esta rota expôs um defeito **pré-existente e mudo**: `scenarioFromValue`
+casava por **substring**, e dois needles são numéricos (`404` e `500`). O boleto de
+id 10404 vira `externalId` `0000010404`, contém "404" — e a **emissão** era recusada
+com `not_found`, antes de qualquer consulta; o de id 5001 tomava erro interno. Não
+era exclusividade do `externalId`: `scenarioFromPayload` também recebe
+`documentNumber`, `account`, `clientCode` e `transactionId`, todos cadeias de
+dígitos em produção — um CPF começado em 404 caía igual.
+
+Corrigido em 28/08: **valor formado só por dígitos casa needle por igualdade**, não
+por substring. Quem digita `404` num campo de cenário continua pedindo `not_found`;
+quem manda `0000010404` como identificador, não. É a mesma armadilha que obrigou o
+magic-cents a valer só abaixo de R$ 1,00 (seção 1) — lá se restringiu o domínio do
+match, aqui a forma dele.
+
+### Cobertura
+
+`tests/charge_v1_smoke.php` (36 asserções, **funcional**: sobe `php -S` e faz HTTP de
+verdade, porque roteamento, método e status HTTP não existem dentro de um builder).
+Quatro mutações conferidas à mão:
+
+| mutação | asserções que caem |
+|---|---|
+| achatar o envelope do `GET` (acomodar o app) | 1 |
+| `GET` inexistente devolvendo o envelope CDE001 | 4 |
+| needle numérico voltando a casar por substring | 3 |
+| `DELETE` inexistente devolvendo 404 | 1 |
+
+⚠️ Ao repetir, **confirme que o teste rodou**, não só que a substituição casou. Na
+primeira passada as três últimas acusaram "nenhuma falha" porque o `php -S` da
+mutação anterior ainda segurava a porta e o smoke abortava no arranque — zero `FAIL`
+e zero `ok` se parecem muito com teste verde. O par de guardas é: alvo encontrado
+**e** saída não vazia.
+
+## 9. Internals
 
 - Catálogo de centavos → cenário: `Cslabs::SCENARIO_BY_CENTS`
 - Resolução: `Cslabs::scenarioFromAmount(mixed $amount, string $default = 'success')`
@@ -564,6 +673,11 @@ indistinguível de teste fraco.
 - Recusa 822: `Cslabs::billPaymentDigitableError()`; motivo da última recusa em
   `Cslabs::lastDigitableRejection()` (para log e teste; a resposta não o expõe,
   porque a Celcoin real também devolve o 822 seco).
+- Charge V1 por externalId: `Cslabs::chargeV1FetchResponse()` e
+  `Cslabs::chargeV1CancelResponse()` — devolvem `['http' => int, 'body' => array]`,
+  porque o status HTTP faz parte do contrato medido. Efeito colateral do
+  cancelamento (mutação do registro + webhook, nessa ordem) em
+  `Cslabs::applyChargeCancellation()`, compartilhado com a rota V2.
 
 Adicionar um novo cenário:
 

@@ -10,31 +10,12 @@ $txid = (string) ($web->args->txid ?? '');
 $body = Cslabs::requestBody();
 $body = is_array($body) ? $body : [];
 
-$response = Cslabs::chargeCancelResponse($txid, $body);
+// Resposta, mutação do registro e webhook — nessa ordem — vivem em
+// Cslabs::applyChargeCancellation, compartilhado com a rota V1 por externalId.
+$response = Cslabs::applyChargeCancellation($txid, (string) ($body['reason'] ?? ''));
 
 if (($response['status'] ?? null) === 'ERROR') {
     http_response_code(422);
-}
-
-// Sucesso do cancelamento é PROCESSING no real (o CANCELED vem pelo webhook).
-if (($response['status'] ?? null) === 'PROCESSING') {
-    $existing = Cslabs::readEntity('charges', $txid);
-    if (is_array($existing)) {
-        $existing['status'] = 'CANCELLED';
-        $existing['cancelled_at'] = date(DATE_ATOM);
-        Cslabs::writeEntity('charges', $txid, $existing);
-    }
-
-    Cslabs::scheduleWebhook(
-        'charge-canceled',
-        Cslabs::webhookEnvelope('charge-canceled', 'CONFIRMED', [
-            'transactionId' => $txid,
-            'status' => 'CANCELLED',
-            'reason' => (string) ($body['reason'] ?? ''),
-        ]),
-        2,
-        Cslabs::webhookSubscriptionUrl('charge-canceled')
-    );
 }
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

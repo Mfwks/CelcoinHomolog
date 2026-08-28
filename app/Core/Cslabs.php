@@ -495,9 +495,29 @@ class Cslabs
             'blocked' => ['bloqueio', 'bloqueado', 'blocked', 'block'],
         ];
 
+        /*
+         * ⚠️ Valor formado só por dígitos casa por IGUALDADE, não por substring.
+         *
+         * Os dois needles numéricos ('404' e '500') existem para quem DIGITA 404
+         * num campo de cenário. Em campo de IDENTIFICADOR eles mordiam por
+         * acidente, e a mordida era silenciosa: `scenarioFromPayload` recebe
+         * `externalId`, `documentNumber`, `account`, `clientCode` e
+         * `transactionId`, que em produção são cadeias de dígitos. O boleto de id
+         * 10404 vira `externalId` `0000010404`, contém "404", e a EMISSÃO era
+         * recusada com not_found; o de id 5001 vira `0000005001`, contém "500", e
+         * tomava erro interno. Um CPF começado em 404 caía igual.
+         *
+         * Medido em 28/08/2026 ao cobrir o par V1 por externalId — o smoke
+         * `charge_v1_smoke` §6 é a regressão. É a MESMA armadilha que já obrigara
+         * o magic-cents a valer só abaixo de R$ 1,00 (docs/scenarios.md §1), onde
+         * um `amount` de 1500 casava o needle "500": lá a correção foi restringir
+         * o domínio do match, aqui é restringir a forma dele.
+         */
+        $soDigitos = $text !== '' && ctype_digit($text);
+
         foreach ($map as $scenario => $needles) {
             foreach ($needles as $needle) {
-                if (str_contains($text, $needle)) {
+                if ($soDigitos ? $text === $needle : str_contains($text, $needle)) {
                     return $scenario;
                 }
             }
@@ -2705,6 +2725,210 @@ class Cslabs
             'split' => $record['split'] ?? [],
             'informations' => null,
             'chargeType' => 'BOLEPIX',
+        ];
+    }
+
+    /*
+     * ── Charge V1 por externalId no path: GET e DELETE ────────────────────────
+     *
+     * Rotas que o app passou a usar em 17/08/2026 (`3099e547a`+`5b8a7748a` no
+     * GET, `cfaf5b24b` no DELETE) e que o mock não tinha. Pedidas pela B-QA em
+     * 27/08 para fechar a prova positiva do BOL-005 (cancelamento) e do BOL-015
+     * parte 1 (linha digitável) — as duas pararam em 🟡 porque o sandbox oficial
+     * da Celcoin purga cobrança e respondeu "não existe" a tudo que se consultou.
+     *
+     * O id do path é o `str_pad($boletoId, 10, '0', STR_PAD_LEFT)` que a emissão
+     * mandou no corpo — NÃO o `transactionId` (UUID). Foi o que o `5b8a7748a`
+     * corrigiu no app depois de tomar 404 consultando por UUID.
+     *
+     * ## O que aqui é medido e o que é inferido
+     *
+     * MEDIDO — `sustenance/dev/2026/2026-08-26-bol-005-qa-homolog/` e
+     * `sustenance/totalis/2026/08-26-bol-015-.../repro-homolog/`, homolog totalis
+     * contra `sandbox.openfinance.celcoin.dev` em 26/08:
+     *
+     *   DELETE .../v1/charge/0000010474 → HTTP 400
+     *     {"version":"1.2.0","status":"ERROR","error":{"errorCode":"CDE001",
+     *      "message":"Não foi encontrado registro para o identificador informado."}}
+     *
+     *   GET .../v1/charge/0000010522    → HTTP 404
+     *     {"statusCode":404,"message":"Resource not found"}
+     *
+     * ⚠️ Os dois "não encontrei" saem em FORMAS DIFERENTES, e a diferença não é
+     * cosmética: o DELETE devolve erro de negócio da Celcoin (família CDE, com
+     * `version`), o GET devolve o 404 genérico do gateway — a mesma cara que um
+     * path inexistente tem. Cada um sai aqui na forma em que foi medido;
+     * uniformizar os dois em CDE001 deixaria o mock mais bonito e menos
+     * verdadeiro, e apagaria justamente o sinal descrito em docs/scenarios.md §9.
+     *
+     * INFERIDO — o sucesso dos dois, que nunca foi observado (o sandbox nunca
+     * tinha a cobrança viva). Segue a família charge, essa sim medida:
+     * `POST /v1/charge` responde `{"version":"1.1.0","status":"SUCCESS",
+     * "body":{"transactionId":…}}` (corpus, confiapay 02/07) e o GET V2 responde
+     * o mesmo envelope com `body.boleto.bankLine` populado.
+     *
+     * Devolvem `['http' => int, 'body' => array]`: o status HTTP faz parte do
+     * contrato medido (400 no DELETE, 404 no GET) e deixá-lo a cargo do stream
+     * espalharia a regra por dois arquivos.
+     */
+    public static function chargeV1FetchResponse(string $externalId): array
+    {
+        $externalId = trim($externalId);
+        $scenario = self::chargeV1Scenario($externalId);
+
+        if ($scenario !== '') {
+            return self::chargeV1ScenarioError($scenario);
+        }
+
+        $record = self::chargeRecordByExternalId($externalId);
+
+        if (!is_array($record)) {
+            return ['http' => 404, 'body' => self::chargeV1GatewayNotFound()];
+        }
+
+        return [
+            'http' => 200,
+            'body' => [
+                'version' => '1.1.0',
+                'status' => 'SUCCESS',
+                'body' => self::chargeFetchBody($record),
+            ],
+        ];
+    }
+
+    public static function chargeV1CancelResponse(string $externalId, array $payload = []): array
+    {
+        $externalId = trim($externalId);
+        $scenario = self::chargeV1Scenario($externalId);
+
+        if ($scenario !== '') {
+            return self::chargeV1ScenarioError($scenario);
+        }
+
+        $record = self::chargeRecordByExternalId($externalId);
+
+        if (!is_array($record)) {
+            return ['http' => 400, 'body' => self::chargeV1NotFound()];
+        }
+
+        $txid = (string) ($record['transactionId'] ?? '');
+        $response = self::applyChargeCancellation($txid, (string) ($payload['reason'] ?? ''));
+
+        if (($response['status'] ?? null) === 'ERROR') {
+            return ['http' => 400, 'body' => self::chargeV1NotFound()];
+        }
+
+        return ['http' => 200, 'body' => $response];
+    }
+
+    /*
+     * Efeito colateral do cancelamento, compartilhado por V1 e V2: o builder
+     * `chargeCancelResponse` monta a resposta a partir do registro AINDA no
+     * status antigo (é o que o real faz — devolve PROCESSING e a cobrança como
+     * estava), e só depois o registro vira CANCELLED e o webhook é agendado.
+     * Essa ordem é o comportamento, não detalhe: invertê-la faria a resposta do
+     * cancelamento já vir cancelada, que não é o que a Celcoin devolve.
+     *
+     * Estava escrito dentro de `streams/api/charge-cancel.php`. Duplicá-lo no
+     * stream V1 seria a cópia que sai de sincronia — a mesma razão de existir do
+     * `lastScenario`.
+     */
+    public static function applyChargeCancellation(string $txid, string $reason = ''): array
+    {
+        $response = self::chargeCancelResponse($txid, ['reason' => $reason]);
+
+        if (($response['status'] ?? null) !== 'PROCESSING') {
+            return $response;
+        }
+
+        $existing = self::readEntity('charges', $txid);
+        $externalId = is_array($existing) ? (string) ($existing['externalId'] ?? '') : '';
+
+        if (is_array($existing)) {
+            $existing['status'] = 'CANCELLED';
+            $existing['cancelled_at'] = date(DATE_ATOM);
+            self::writeEntity('charges', $txid, $existing);
+        }
+
+        $body = [
+            'transactionId' => $txid,
+            'status' => 'CANCELLED',
+            'reason' => $reason,
+        ];
+
+        // O webhook real traz o `externalId` (93 amostras em mocks-v2/webhooks-raw.log,
+        // todas com ele). É por ele que um consumidor casa a cobrança quando guardou
+        // o id que ELE mandou, e não o UUID que a Celcoin devolveu.
+        if ($externalId !== '') {
+            $body['externalId'] = $externalId;
+        }
+
+        self::scheduleWebhook(
+            'charge-canceled',
+            self::webhookEnvelope('charge-canceled', 'CONFIRMED', $body),
+            2,
+            self::webhookSubscriptionUrl('charge-canceled')
+        );
+
+        return $response;
+    }
+
+    private static function chargeRecordByExternalId(string $externalId): array|false
+    {
+        if ($externalId === '') {
+            return false;
+        }
+
+        $alias = self::readEntity('charges_by_external_id', $externalId);
+
+        if (!is_array($alias) || empty($alias['transactionId'])) {
+            return false;
+        }
+
+        return self::readEntity('charges', (string) $alias['transactionId']);
+    }
+
+    /*
+     * Cenário deliberado pelo próprio externalId, para o teste negativo que não
+     * dá para semear (cobrança viva que a política recusa cancelar).
+     *
+     * Não precisa de guarda contra id real: `scenarioFromValue` só casa needle
+     * numérico por igualdade, então `0000010404` NÃO vira not_found. A guarda
+     * está lá, e não aqui, porque a colisão nunca foi só desta rota — ver o
+     * comentário longo em scenarioFromValue.
+     */
+    private static function chargeV1Scenario(string $externalId): string
+    {
+        return self::scenarioFromValue($externalId, '');
+    }
+
+    private static function chargeV1ScenarioError(string $scenario): array
+    {
+        $body = self::chargeError($scenario);
+        $body['version'] = '1.2.0';
+
+        return ['http' => self::scenarioHttpStatus($scenario), 'body' => $body];
+    }
+
+    /** Erro de negócio da Celcoin no DELETE — medido, HTTP 400. */
+    private static function chargeV1NotFound(): array
+    {
+        return [
+            'version' => '1.2.0',
+            'status' => 'ERROR',
+            'error' => [
+                'errorCode' => 'CDE001',
+                'message' => 'Não foi encontrado registro para o identificador informado.',
+            ],
+        ];
+    }
+
+    /** 404 do gateway no GET — medido, e deliberadamente SEM envelope Celcoin. */
+    private static function chargeV1GatewayNotFound(): array
+    {
+        return [
+            'statusCode' => 404,
+            'message' => 'Resource not found',
         ];
     }
 

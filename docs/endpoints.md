@@ -33,6 +33,8 @@ agendado nunca sai. Ver `docs/scenarios.md` §5 e §6.
 | POST    | `/baas/v2/billpayment`                                                               | `api/billpayment`            | `efetuaPagamento` (pagamento de boleto)   |
 | GET     | `/baas/v2/billpayment/status`                                                        | `api/billpayment-status`     | `confirmarPagamento` (status pagamento)   |
 | POST    | `/api-integration-baas-webservice/v1/charge`                                         | `api/charge`                 | `emissaoBoletoCobranca`                   |
+| GET     | `/api-integration-baas-webservice/v1/charge/{externalId}`                            | `api/charge-v1`              | `getChargeDetails` — consulta por `externalId` (BOL-015) |
+| DELETE  | `/api-integration-baas-webservice/v1/charge/{externalId}`                            | `api/charge-v1`              | `cancelarBoletoCobrancaApi` — cancela por `externalId` (BOL-005) |
 | GET     | `/pix/v1/dict/v2/key`                                                                | `api/key-old`                | `consultarChave` (antigo)                 |
 | GET     | `/celcoin-baas-pix-dict-webservice/v1/pix/dict/entry/external/{account}`             | `api/key`                    | Consulta de chave PIX (DICT BaaS)         |
 | GET     | `/baas/v2/pix/dict/entry/external/{account}`                                         | `api/key`                    | Consulta de chave PIX (alias v2)          |
